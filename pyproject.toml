@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "secure-ingest"
+version = "0.1.0"
+description = "Layered defense framework for safely ingesting content from other agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "jsonschema>=4.17.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "numpy>=1.24.0",
+    "scikit-learn>=1.3.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+secure-ingest = "secure_ingest.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
