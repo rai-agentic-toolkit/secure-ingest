@@ -210,13 +210,13 @@ The result is a bridge between cutting-edge research and practical deployment ne
 
 ### Supporting Standards & Frameworks
 
-5. **OWASP Foundation** (2025). Top 10 for LLM Applications - LLM01:2025 Prompt Injection. <https://genai.owasp.org/llmrisk/llm01-prompt-injection/>
+1. **OWASP Foundation** (2025). Top 10 for LLM Applications - LLM01:2025 Prompt Injection. <https://genai.owasp.org/llmrisk/llm01-prompt-injection/>
 
 2. **MITRE Corporation** (2024). ATLAS - AML.T0051.001 LLM Prompt Injection Attack Technique. <https://atlas.mitre.org/techniques/AML.T0051.001>
 
 ### Problem Space Recognition
 
-7. **SecureClaw.dev** - Inspiration for recognizing agent-to-agent content ingestion as a specialized security domain requiring dedicated solutions.
+1. **SecureClaw.dev** - Inspiration for recognizing agent-to-agent content ingestion as a specialized security domain requiring dedicated solutions.
 
 ---
 
