@@ -206,3 +206,82 @@ def parse(
         return _parse_markdown(content, strip_injections=strip_injections)
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
+
+
+@dataclass
+class ParserConfig:
+    """Configuration for the ContentParser."""
+    strict: bool = True
+    strip_injections: bool = True
+
+
+@dataclass
+class ContentParserResult:
+    """Result type expected by the ingestion pipeline."""
+    success: bool
+    parsed_content: dict[str, Any] | None = None
+    error: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+class ContentParser:
+    """Object-oriented parser interface for the ingestion pipeline.
+
+    Wraps the module-level parse() function in the interface that
+    IngestionPipeline expects.
+    """
+
+    def __init__(self, config: ParserConfig | None = None) -> None:
+        self._config = config or ParserConfig()
+
+    def parse(self, raw_content: str, content_type: str) -> ContentParserResult:
+        """Parse raw content and return a pipeline-compatible result."""
+        if not raw_content:
+            return ContentParserResult(
+                success=False,
+                error="empty content",
+            )
+
+        # Map pipeline content types to parser content types.
+        # The pipeline uses domain names like "security_finding";
+        # all of those are JSON payloads.
+        parser_type = self._resolve_content_type(content_type)
+
+        try:
+            result = parse(
+                raw_content,
+                parser_type,
+                strict=self._config.strict,
+                strip_injections=self._config.strip_injections,
+            )
+            # For JSON content, .content is already a dict.
+            # For text/markdown, wrap it so downstream expects dict.
+            parsed = result.content
+            if not isinstance(parsed, dict):
+                parsed = {"content": parsed, "_content_type": content_type}
+
+            return ContentParserResult(
+                success=True,
+                parsed_content=parsed,
+                warnings=list(result.warnings),
+            )
+        except ParseError as e:
+            return ContentParserResult(
+                success=False,
+                error=str(e),
+            )
+
+    @staticmethod
+    def _resolve_content_type(content_type: str) -> str:
+        """Map pipeline content type names to parser content types."""
+        # Known JSON-based types from the schema registry
+        json_types = {"security_finding", "analysis_report"}
+        if content_type in json_types:
+            return "json"
+        # If it matches a known ContentType value, pass through
+        try:
+            ContentType(content_type.lower())
+            return content_type.lower()
+        except ValueError:
+            # Default: treat unknown types as JSON (the pipeline validates schema later)
+            return "json"
