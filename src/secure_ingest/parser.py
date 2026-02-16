@@ -1,136 +1,208 @@
-"""Stateless sandboxed content parser.
+"""Core parser — stateless, sandboxed content ingestion for AI agents.
 
-Converts raw text content into structured data using strict extraction rules.
-This parser has NO capabilities: no tools, no memory, no network access.
-Each invocation is completely isolated.
-
-Design principle: even if a prompt injection succeeds at manipulating the
-parser's LLM, the output is still constrained to the predefined schema.
-Since no real LLM is required for the MVP, this module implements a
-deterministic JSON extraction parser that enforces the same architectural
-guarantees.
+Design principles:
+- Stateless: no side effects, no persistence, pure function
+- Sandboxed: no code execution, no network, no file I/O
+- Deny-by-default: only explicitly allowed content passes
+- Prompt injection resistant: strips/escapes injection patterns
 """
 
 from __future__ import annotations
 
 import json
-import time
+import re
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+
+class ContentType(Enum):
+    """Supported content types for ingestion."""
+    JSON = "json"
+    TEXT = "text"
+    MARKDOWN = "markdown"
+
+
+class ParseError(Exception):
+    """Raised when content fails validation."""
+
+    def __init__(self, message: str, content_type: str | None = None,
+                 violations: list[str] | None = None):
+        super().__init__(message)
+        self.content_type = content_type
+        self.violations = violations or []
 
 
 @dataclass(frozen=True)
 class ParseResult:
-    """Immutable result from a parse operation."""
-
-    success: bool
-    parsed_content: dict[str, Any] | None = None
-    error: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class ParserConfig:
-    """Parser configuration - capabilities are always empty."""
-
-    max_content_bytes: int = 1_048_576  # 1 MB
-    max_parse_time_seconds: float = 30.0
-    # Security constraints (not configurable - always enforced)
-    tools: tuple = ()          # No tools
-    memory: bool = False       # Stateless
-    network_access: bool = False  # No network
+    """Immutable result from parsing content."""
+    content: Any
+    content_type: ContentType
+    sanitized: bool
+    warnings: list[str] = field(default_factory=list)
+    stripped: list[str] = field(default_factory=list)
 
 
-class ContentParser:
-    """Stateless content parser with no capabilities.
+# --- Prompt injection detection ---
 
-    Each call to parse() is independent - no state carries over between calls.
-    The parser can only produce JSON matching a predefined structure.
-    """
+# Patterns that indicate prompt injection attempts in agent-to-agent content.
+# Deliberately broad — false positives are safer than false negatives.
+_INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)\b(?:ignore|disregard|forget)\b.{0,30}\b(?:previous|above|prior|all)\b.{0,30}\b(?:instructions?|rules?|context|prompts?)\b"), "instruction_override"),
+    (re.compile(r"(?i)\b(?:you are|act as|pretend|roleplay|simulate)\b.{0,30}\b(?:a|an|the|now)\b"), "role_hijack"),
+    (re.compile(r"(?i)\b(?:system|assistant|user)\s*(?:prompt|message|:)"), "message_boundary"),
+    (re.compile(r"(?i)<\|(?:im_start|im_end|endoftext|system|user|assistant)\|>"), "chat_template"),
+    (re.compile(r"(?i)\[(?:INST|SYS|/INST|/SYS)\]"), "instruction_tag"),
+    (re.compile(r"(?i)#{1,3}\s*(?:system\s*(?:prompt|message|instruction)|new\s*(?:instruction|task|role))"), "header_injection"),
+]
 
-    def __init__(self, config: ParserConfig | None = None) -> None:
-        self._config = config or ParserConfig()
+_MAX_TEXT_SIZE = 1_000_000    # 1MB
+_MAX_JSON_SIZE = 10_000_000   # 10MB
+_MAX_JSON_DEPTH = 50
 
-    def parse(self, raw_content: str, content_type: str) -> ParseResult:
-        """Parse raw content into structured data.
 
-        This is a deterministic extraction: find JSON in the input, parse it,
-        and return it. No LLM is used in the MVP - this enforces the same
-        architectural guarantee that the parser can only produce structured
-        output and cannot take actions.
-        """
-        start = time.monotonic()
+def _check_injection(text: str) -> list[str]:
+    """Check text for prompt injection patterns. Returns matched pattern names."""
+    return [name for pattern, name in _INJECTION_PATTERNS if pattern.search(text)]
 
-        # Enforce size limit
-        if len(raw_content.encode("utf-8", errors="replace")) > self._config.max_content_bytes:
-            return ParseResult(
-                success=False,
-                error="content_too_large",
-                metadata={"max_bytes": self._config.max_content_bytes},
-            )
 
-        if not raw_content.strip():
-            return ParseResult(success=False, error="empty_content")
-
-        # Try to extract JSON from the content
-        parsed = self._extract_json(raw_content)
-        elapsed = time.monotonic() - start
-
-        if elapsed > self._config.max_parse_time_seconds:
-            return ParseResult(success=False, error="timeout")
-
-        if parsed is None:
-            return ParseResult(
-                success=False,
-                error="no_json_found",
-                metadata={"parse_time": elapsed},
-            )
-
-        if not isinstance(parsed, dict):
-            return ParseResult(
-                success=False,
-                error="expected_object",
-                metadata={"parse_time": elapsed, "got_type": type(parsed).__name__},
-            )
-
-        return ParseResult(
-            success=True,
-            parsed_content=parsed,
-            metadata={
-                "parse_time": elapsed,
-                "content_type": content_type,
-                "parser_version": "0.1.0",
-            },
+def _check_json_depth(obj: Any, max_depth: int = _MAX_JSON_DEPTH, _current: int = 0) -> None:
+    """Raise ParseError if JSON nesting exceeds max depth."""
+    if _current > max_depth:
+        raise ParseError(
+            f"JSON nesting depth exceeds maximum of {max_depth}",
+            content_type="json",
+            violations=["excessive_nesting"],
         )
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_json_depth(v, max_depth, _current + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _check_json_depth(item, max_depth, _current + 1)
 
-    def _extract_json(self, text: str) -> Any:
-        """Extract JSON from text content.
 
-        Tries the full text first, then looks for JSON embedded in the text.
-        """
-        # Try parsing the entire text as JSON
-        text = text.strip()
+def _strip_injection_from_text(text: str) -> tuple[str, list[str]]:
+    """Strip injection patterns from text. Returns (cleaned_text, stripped_pattern_names)."""
+    stripped = []
+    cleaned = text
+    for pattern, name in _INJECTION_PATTERNS:
+        if pattern.search(cleaned):
+            cleaned = pattern.sub("[REDACTED]", cleaned)
+            stripped.append(name)
+    return cleaned, stripped
+
+
+def _scan_json_strings(obj: Any, warnings: list[str]) -> None:
+    """Recursively scan JSON string values for injection patterns."""
+    if isinstance(obj, str):
+        for m in _check_injection(obj):
+            warnings.append(f"injection_in_value:{m}")
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            for m in _check_injection(k):
+                warnings.append(f"injection_in_key:{m}")
+            _scan_json_strings(v, warnings)
+    elif isinstance(obj, list):
+        for item in obj:
+            _scan_json_strings(item, warnings)
+
+
+# --- Content type parsers ---
+
+def _parse_json(raw: str | bytes, *, strict: bool = True) -> ParseResult:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if len(raw) > _MAX_JSON_SIZE:
+        raise ParseError("JSON exceeds max size", content_type="json", violations=["size_exceeded"])
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ParseError(f"Invalid JSON: {e}", content_type="json", violations=["invalid_json"]) from e
+    _check_json_depth(parsed)
+    warnings: list[str] = []
+    _scan_json_strings(parsed, warnings)
+    return ParseResult(content=parsed, content_type=ContentType.JSON, sanitized=True, warnings=warnings)
+
+
+def _parse_text(raw: str | bytes, *, strip_injections: bool = True) -> ParseResult:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if len(raw) > _MAX_TEXT_SIZE:
+        raise ParseError("Text exceeds max size", content_type="text", violations=["size_exceeded"])
+    warnings: list[str] = []
+    stripped: list[str] = []
+    if strip_injections:
+        matches = _check_injection(raw)
+        if matches:
+            raw, stripped = _strip_injection_from_text(raw)
+            warnings.extend(f"stripped:{s}" for s in stripped)
+    return ParseResult(content=raw, content_type=ContentType.TEXT, sanitized=True, warnings=warnings, stripped=stripped)
+
+
+def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True) -> ParseResult:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if len(raw) > _MAX_TEXT_SIZE:
+        raise ParseError("Markdown exceeds max size", content_type="markdown", violations=["size_exceeded"])
+    warnings: list[str] = []
+    stripped: list[str] = []
+    # Strip HTML tags — deny by default
+    html_pattern = re.compile(r"<[^>]+>")
+    html_matches = html_pattern.findall(raw)
+    if html_matches:
+        raw = html_pattern.sub("", raw)
+        stripped.append(f"html_tags({len(html_matches)})")
+        warnings.append(f"stripped {len(html_matches)} HTML tags")
+    if strip_injections:
+        matches = _check_injection(raw)
+        if matches:
+            raw, inj_stripped = _strip_injection_from_text(raw)
+            stripped.extend(inj_stripped)
+            warnings.extend(f"stripped:{s}" for s in inj_stripped)
+    return ParseResult(content=raw, content_type=ContentType.MARKDOWN, sanitized=True, warnings=warnings, stripped=stripped)
+
+
+# --- Public API ---
+
+def parse(
+    content: str | bytes,
+    content_type: ContentType | str = ContentType.TEXT,
+    *,
+    strict: bool = True,
+    strip_injections: bool = True,
+) -> ParseResult:
+    """Parse and sanitize content for safe agent ingestion.
+
+    Args:
+        content: Raw content to parse (string or bytes).
+        content_type: The type of content (json, text, markdown).
+        strict: If True, raise on any validation failure.
+        strip_injections: If True, strip detected prompt injection patterns.
+
+    Returns:
+        ParseResult with sanitized content and any warnings.
+
+    Raises:
+        ParseError: If content fails validation.
+
+    Example:
+        >>> from secure_ingest import parse, ContentType
+        >>> result = parse('{"key": "value"}', ContentType.JSON)
+        >>> result.content
+        {'key': 'value'}
+    """
+    if isinstance(content_type, str):
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
+            content_type = ContentType(content_type.lower())
+        except ValueError:
+            raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
-        # Look for JSON object embedded in text (find first { ... last })
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        # Look for JSON array embedded in text
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        return None
+    if content_type == ContentType.JSON:
+        return _parse_json(content, strict=strict)
+    elif content_type == ContentType.TEXT:
+        return _parse_text(content, strip_injections=strip_injections)
+    elif content_type == ContentType.MARKDOWN:
+        return _parse_markdown(content, strip_injections=strip_injections)
+    else:
+        raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])

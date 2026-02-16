@@ -1,7 +1,6 @@
-"""Secure Agent Content Ingestion System.
+"""secure-ingest: Stateless sandboxed content parser for AI agent ingestion."""
 
-A layered defense framework for safely ingesting content from other agents
-without prompt injection risks.
-"""
+from .parser import parse, ParseResult, ParseError, ContentType
 
 __version__ = "0.1.0"
+__all__ = ["parse", "ParseResult", "ParseError", "ContentType"]
