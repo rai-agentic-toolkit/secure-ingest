@@ -4,9 +4,11 @@ from .parser import (
     parse, ParseResult, ParseError, ContentType,
     InjectionPattern, PatternRegistry, BUILTIN_PATTERNS,
 )
+from .schema import Schema, Field, SchemaError
 
 __version__ = "0.1.0"
 __all__ = [
     "parse", "ParseResult", "ParseError", "ContentType",
     "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
+    "Schema", "Field", "SchemaError",
 ]

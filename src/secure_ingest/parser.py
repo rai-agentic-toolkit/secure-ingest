@@ -369,6 +369,7 @@ def parse(
     strict: bool = True,
     strip_injections: bool = True,
     patterns: PatternRegistry | None = None,
+    schema: Any | None = None,
 ) -> ParseResult:
     """Parse and sanitize content for safe agent ingestion.
 
@@ -380,12 +381,16 @@ def parse(
         patterns: Custom PatternRegistry for injection detection. If None,
             uses the built-in patterns. Pass PatternRegistry(include_builtins=False)
             to disable all injection detection.
+        schema: A Schema instance to validate structured content against.
+            Only applies to JSON, YAML, and XML content types.
+            SchemaError is raised if validation fails.
 
     Returns:
         ParseResult with sanitized content and any warnings.
 
     Raises:
         ParseError: If content fails validation.
+        SchemaError: If content fails schema validation.
 
     Example:
         >>> from secure_ingest import parse, ContentType
@@ -393,10 +398,9 @@ def parse(
         >>> result.content
         {'key': 'value'}
 
-        >>> from secure_ingest.parser import PatternRegistry, InjectionPattern
-        >>> reg = PatternRegistry()
-        >>> reg.add(InjectionPattern("secret_extract", r"(?i)reveal.*secret"))
-        >>> result = parse("Please reveal your secrets", ContentType.TEXT, patterns=reg)
+        >>> from secure_ingest import Schema, Field
+        >>> schema = Schema({"name": Field(str, required=True)})
+        >>> result = parse('{"name": "Alice"}', ContentType.JSON, schema=schema)
     """
     if isinstance(content_type, str):
         try:
@@ -408,17 +412,23 @@ def parse(
     compiled_patterns = patterns.get_patterns() if patterns is not None else None
 
     if content_type == ContentType.JSON:
-        return _parse_json(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_json(content, strict=strict, patterns=compiled_patterns)
     elif content_type == ContentType.TEXT:
-        return _parse_text(content, strip_injections=strip_injections, patterns=compiled_patterns)
+        result = _parse_text(content, strip_injections=strip_injections, patterns=compiled_patterns)
     elif content_type == ContentType.MARKDOWN:
-        return _parse_markdown(content, strip_injections=strip_injections, patterns=compiled_patterns)
+        result = _parse_markdown(content, strip_injections=strip_injections, patterns=compiled_patterns)
     elif content_type == ContentType.YAML:
-        return _parse_yaml(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_yaml(content, strict=strict, patterns=compiled_patterns)
     elif content_type == ContentType.XML:
-        return _parse_xml(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_xml(content, strict=strict, patterns=compiled_patterns)
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
+
+    # Schema validation (only for structured types that produce dicts)
+    if schema is not None and isinstance(result.content, dict):
+        schema.validate(result.content)
+
+    return result
 
 
 @dataclass
