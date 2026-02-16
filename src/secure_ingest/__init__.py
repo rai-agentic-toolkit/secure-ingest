@@ -1,6 +1,12 @@
 """secure-ingest: Stateless sandboxed content parser for AI agent ingestion."""
 
-from .parser import parse, ParseResult, ParseError, ContentType
+from .parser import (
+    parse, ParseResult, ParseError, ContentType,
+    InjectionPattern, PatternRegistry, BUILTIN_PATTERNS,
+)
 
 __version__ = "0.1.0"
-__all__ = ["parse", "ParseResult", "ParseError", "ContentType"]
+__all__ = [
+    "parse", "ParseResult", "ParseError", "ContentType",
+    "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
+]
