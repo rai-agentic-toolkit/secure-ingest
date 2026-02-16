@@ -24,6 +24,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0"]
+
 [project.urls]
 Homepage = "https://github.com/rai-tools/secure-ingest"
 Repository = "https://github.com/rai-tools/secure-ingest"

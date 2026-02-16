@@ -21,6 +21,8 @@ class ContentType(Enum):
     JSON = "json"
     TEXT = "text"
     MARKDOWN = "markdown"
+    YAML = "yaml"
+    XML = "xml"
 
 
 class ParseError(Exception):
@@ -163,6 +165,137 @@ def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True) -> Parse
     return ParseResult(content=raw, content_type=ContentType.MARKDOWN, sanitized=True, warnings=warnings, stripped=stripped)
 
 
+def _parse_yaml(raw: str | bytes, *, strict: bool = True) -> ParseResult:
+    """Parse YAML content with depth limits and injection scanning.
+
+    Uses PyYAML safe_load (no arbitrary Python object construction).
+    Falls back to treating as text if PyYAML is not installed.
+    """
+    try:
+        import yaml
+    except ImportError:
+        raise ParseError(
+            "PyYAML is required for YAML parsing: pip install secure-ingest[yaml]",
+            content_type="yaml",
+            violations=["missing_dependency"],
+        )
+
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    if len(raw) > _MAX_JSON_SIZE:  # Same size limit as JSON
+        raise ParseError("YAML exceeds max size", content_type="yaml", violations=["size_exceeded"])
+
+    try:
+        parsed = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        raise ParseError(f"Invalid YAML: {e}", content_type="yaml", violations=["invalid_yaml"]) from e
+
+    # YAML can parse scalars — ensure we got a container or wrap it
+    if parsed is None:
+        parsed = {}
+
+    # Depth check (YAML can be deeply nested too)
+    _check_json_depth(parsed)
+
+    warnings: list[str] = []
+    _scan_json_strings(parsed, warnings)
+    return ParseResult(content=parsed, content_type=ContentType.YAML, sanitized=True, warnings=warnings)
+
+
+_MAX_XML_SIZE = 10_000_000  # 10MB
+
+
+def _parse_xml(raw: str | bytes, *, strict: bool = True) -> ParseResult:
+    """Parse XML content with XXE protection and injection scanning.
+
+    Security measures:
+    - Disables external entity resolution (XXE protection)
+    - Disables DTD processing
+    - Enforces size limits
+    - Scans text content for injection patterns
+    """
+    import xml.etree.ElementTree as ET
+    from xml.parsers.expat import ExpatError
+
+    if isinstance(raw, bytes):
+        raw_str = raw.decode("utf-8", errors="replace")
+    else:
+        raw_str = raw
+
+    if len(raw_str) > _MAX_XML_SIZE:
+        raise ParseError("XML exceeds max size", content_type="xml", violations=["size_exceeded"])
+
+    # Reject DOCTYPE declarations entirely — this prevents XXE, billion laughs, etc.
+    if re.search(r"<!DOCTYPE", raw_str, re.IGNORECASE):
+        raise ParseError(
+            "DOCTYPE declarations are not allowed (XXE protection)",
+            content_type="xml",
+            violations=["doctype_forbidden"],
+        )
+
+    try:
+        root = ET.fromstring(raw_str)
+    except ET.ParseError as e:
+        raise ParseError(f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]) from e
+    except ExpatError as e:
+        raise ParseError(f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]) from e
+
+    warnings: list[str] = []
+
+    def _element_to_dict(elem: ET.Element) -> dict:
+        """Convert XML element tree to dict, scanning for injections."""
+        result: dict = {}
+        # Attributes
+        if elem.attrib:
+            for k, v in elem.attrib.items():
+                for m in _check_injection(v):
+                    warnings.append(f"injection_in_attr:{m}")
+                for m in _check_injection(k):
+                    warnings.append(f"injection_in_attr_name:{m}")
+            result["@attributes"] = dict(elem.attrib)
+
+        # Text content
+        if elem.text and elem.text.strip():
+            for m in _check_injection(elem.text):
+                warnings.append(f"injection_in_text:{m}")
+            result["#text"] = elem.text.strip()
+
+        # Child elements
+        for child in elem:
+            child_dict = _element_to_dict(child)
+            tag = child.tag
+            # Strip namespace prefixes for cleaner output
+            if "}" in tag:
+                tag = tag.split("}", 1)[1]
+            if tag in result:
+                # Multiple children with same tag → list
+                existing = result[tag]
+                if not isinstance(existing, list):
+                    result[tag] = [existing]
+                result[tag].append(child_dict)
+            else:
+                result[tag] = child_dict
+
+            # Tail text (text after child element)
+            if child.tail and child.tail.strip():
+                for m in _check_injection(child.tail):
+                    warnings.append(f"injection_in_text:{m}")
+
+        return result
+
+    parsed = _element_to_dict(root)
+    # Check depth of the resulting dict
+    _check_json_depth(parsed)
+
+    # Include root tag in result
+    root_tag = root.tag
+    if "}" in root_tag:
+        root_tag = root_tag.split("}", 1)[1]
+    content = {root_tag: parsed}
+
+    return ParseResult(content=content, content_type=ContentType.XML, sanitized=True, warnings=warnings)
+
+
 # --- Public API ---
 
 def parse(
@@ -204,6 +337,10 @@ def parse(
         return _parse_text(content, strip_injections=strip_injections)
     elif content_type == ContentType.MARKDOWN:
         return _parse_markdown(content, strip_injections=strip_injections)
+    elif content_type == ContentType.YAML:
+        return _parse_yaml(content, strict=strict)
+    elif content_type == ContentType.XML:
+        return _parse_xml(content, strict=strict)
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
@@ -278,6 +415,14 @@ class ContentParser:
         json_types = {"security_finding", "analysis_report"}
         if content_type in json_types:
             return "json"
+        # Known YAML-based types
+        yaml_types = {"config", "pipeline_config", "ci_config"}
+        if content_type in yaml_types:
+            return "yaml"
+        # Known XML-based types
+        xml_types = {"feed", "rss", "atom", "soap_message"}
+        if content_type in xml_types:
+            return "xml"
         # If it matches a known ContentType value, pass through
         try:
             ContentType(content_type.lower())
