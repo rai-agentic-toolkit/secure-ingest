@@ -170,5 +170,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     return 0 if not result.is_anomaly else 1
 
 
+def entry_point() -> None:
+    """Entry point for console_scripts — calls main() and exits with its return code."""
+    sys.exit(main())
+
+
 if __name__ == "__main__":
     sys.exit(main())

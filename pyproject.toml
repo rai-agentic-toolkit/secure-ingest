@@ -31,5 +31,8 @@ yaml = ["pyyaml>=6.0"]
 Homepage = "https://github.com/rai-tools/secure-ingest"
 Repository = "https://github.com/rai-tools/secure-ingest"
 
+[project.scripts]
+secure-ingest = "secure_ingest.cli:entry_point"
+
 [tool.setuptools.packages.find]
 where = ["src"]
