@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "secure-ingest"
-version = "0.1.0"
+version = "0.2.0"
 description = "Stateless sandboxed content parser for AI agent ingestion — prevents prompt injection"
 readme = "README.md"
 license = "MIT"
@@ -30,6 +30,9 @@ yaml = ["pyyaml>=6.0"]
 [project.urls]
 Homepage = "https://github.com/rai-tools/secure-ingest"
 Repository = "https://github.com/rai-tools/secure-ingest"
+
+[project.scripts]
+secure-ingest = "secure_ingest.cli:entry_point"
 
 [tool.setuptools.packages.find]
 where = ["src"]

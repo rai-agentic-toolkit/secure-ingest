@@ -1,0 +1,8 @@
+{
+  "vulnerability_id": "CVE-2024-12345",
+  "severity": "HIGH",
+  "cvss_score": 7.5,
+  "description": "SQL injection vulnerability found in the authentication module. User input is not properly sanitized before being used in database queries, allowing attackers to bypass login controls.",
+  "affected_systems": ["auth-service", "user-db"],
+  "recommendation": "Apply security patches and use parameterized queries for all database operations."
+}
