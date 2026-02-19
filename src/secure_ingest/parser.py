@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -23,6 +24,32 @@ class ContentType(Enum):
     MARKDOWN = "markdown"
     YAML = "yaml"
     XML = "xml"
+
+
+class TaintLevel(Enum):
+    """Taint level for tracking content trust through multi-agent flows.
+
+    Levels (ordered by trust, lowest to highest):
+    - UNTRUSTED: Raw content, not yet processed by secure-ingest.
+    - SANITIZED: Processed by secure-ingest, injection patterns stripped/detected.
+    - VALIDATED: Sanitized AND passed schema validation.
+    """
+    UNTRUSTED = "untrusted"
+    SANITIZED = "sanitized"
+    VALIDATED = "validated"
+
+    def __lt__(self, other: "TaintLevel") -> bool:
+        order = {TaintLevel.UNTRUSTED: 0, TaintLevel.SANITIZED: 1, TaintLevel.VALIDATED: 2}
+        return order[self] < order[other]
+
+    def __le__(self, other: "TaintLevel") -> bool:
+        return self == other or self < other
+
+    def __gt__(self, other: "TaintLevel") -> bool:
+        return not self <= other
+
+    def __ge__(self, other: "TaintLevel") -> bool:
+        return not self < other
 
 
 class ParseError(Exception):
@@ -43,6 +70,9 @@ class ParseResult:
     sanitized: bool
     warnings: list[str] = field(default_factory=list)
     stripped: list[str] = field(default_factory=list)
+    taint: TaintLevel = TaintLevel.SANITIZED
+    provenance: str = ""
+    chain_id: str = ""
 
 
 # --- Injection pattern system ---
@@ -370,6 +400,8 @@ def parse(
     strip_injections: bool = True,
     patterns: PatternRegistry | None = None,
     schema: Any | None = None,
+    provenance: str = "",
+    chain_id: str = "",
 ) -> ParseResult:
     """Parse and sanitize content for safe agent ingestion.
 
@@ -384,9 +416,13 @@ def parse(
         schema: A Schema instance to validate structured content against.
             Only applies to JSON, YAML, and XML content types.
             SchemaError is raised if validation fails.
+        provenance: Source identifier for taint tracking (e.g., "agent-A",
+            "api-gateway"). Propagated in the result for downstream consumers.
+        chain_id: Correlation ID for tracking content through multi-hop flows.
+            If empty, a new UUID is generated automatically.
 
     Returns:
-        ParseResult with sanitized content and any warnings.
+        ParseResult with sanitized content, taint metadata, and any warnings.
 
     Raises:
         ParseError: If content fails validation.
@@ -397,10 +433,14 @@ def parse(
         >>> result = parse('{"key": "value"}', ContentType.JSON)
         >>> result.content
         {'key': 'value'}
+        >>> result.taint
+        <TaintLevel.SANITIZED: 'sanitized'>
 
         >>> from secure_ingest import Schema, Field
         >>> schema = Schema({"name": Field(str, required=True)})
         >>> result = parse('{"name": "Alice"}', ContentType.JSON, schema=schema)
+        >>> result.taint
+        <TaintLevel.VALIDATED: 'validated'>
     """
     if isinstance(content_type, str):
         try:
@@ -410,6 +450,10 @@ def parse(
 
     # Resolve patterns to compiled list (None = use module defaults)
     compiled_patterns = patterns.get_patterns() if patterns is not None else None
+
+    # Generate chain_id if not provided
+    if not chain_id:
+        chain_id = uuid.uuid4().hex[:12]
 
     if content_type == ContentType.JSON:
         result = _parse_json(content, strict=strict, patterns=compiled_patterns)
@@ -424,11 +468,94 @@ def parse(
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
+    # Determine taint level
+    taint = TaintLevel.SANITIZED
+
     # Schema validation (only for structured types that produce dicts)
     if schema is not None and isinstance(result.content, dict):
         schema.validate(result.content)
+        taint = TaintLevel.VALIDATED
 
-    return result
+    # Return result with taint metadata applied
+    return ParseResult(
+        content=result.content,
+        content_type=result.content_type,
+        sanitized=result.sanitized,
+        warnings=result.warnings,
+        stripped=result.stripped,
+        taint=taint,
+        provenance=provenance,
+        chain_id=chain_id,
+    )
+
+
+def compose(*results: ParseResult, chain_id: str = "") -> ParseResult:
+    """Safely combine multiple ParseResults with taint propagation.
+
+    The composed result has:
+    - taint: minimum taint level across all inputs (least trusted wins)
+    - provenance: comma-separated list of all input provenances
+    - chain_id: shared chain_id (new UUID if not provided)
+    - content: list of all input contents
+    - warnings: merged from all inputs
+    - stripped: merged from all inputs
+
+    Args:
+        *results: Two or more ParseResult instances to combine.
+        chain_id: Shared chain ID for the composed result.
+            If empty, generates a new one.
+
+    Returns:
+        A new ParseResult combining all inputs.
+
+    Raises:
+        ValueError: If fewer than 2 results are provided.
+
+    Example:
+        >>> r1 = parse('{"a": 1}', "json", provenance="agent-a")
+        >>> r2 = parse("hello", "text", provenance="agent-b")
+        >>> combined = compose(r1, r2)
+        >>> combined.taint  # min of both
+        <TaintLevel.SANITIZED: 'sanitized'>
+    """
+    if len(results) < 2:
+        raise ValueError("compose() requires at least 2 ParseResults")
+
+    if not chain_id:
+        chain_id = uuid.uuid4().hex[:12]
+
+    # Taint = minimum (least trusted wins)
+    taint = min(results, key=lambda r: r.taint).taint
+
+    # Merge provenance (deduplicated, ordered)
+    seen: set[str] = set()
+    provenances: list[str] = []
+    for r in results:
+        if r.provenance and r.provenance not in seen:
+            provenances.append(r.provenance)
+            seen.add(r.provenance)
+    provenance = ",".join(provenances)
+
+    # Merge warnings and stripped
+    all_warnings: list[str] = []
+    all_stripped: list[str] = []
+    for r in results:
+        all_warnings.extend(r.warnings)
+        all_stripped.extend(r.stripped)
+
+    # Content is a list of all contents
+    contents = [r.content for r in results]
+
+    return ParseResult(
+        content=contents,
+        content_type=results[0].content_type,
+        sanitized=all(r.sanitized for r in results),
+        warnings=all_warnings,
+        stripped=all_stripped,
+        taint=taint,
+        provenance=provenance,
+        chain_id=chain_id,
+    )
 
 
 @dataclass
