@@ -150,6 +150,39 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (p.compiled, p.name) for p in BUILTIN_PATTERNS
 ]
 
+@dataclass(frozen=True)
+class Policy:
+    """Structural policy enforcement for content ingestion.
+
+    Policies compile security rules into the parse call itself — the PCAS
+    principle of "structural enforcement over runtime detection." Instead of
+    relying on consumers to check results, the policy prevents disallowed
+    content from being parsed at all.
+
+    Args:
+        allowed_types: Set of ContentType values that are permitted.
+            If None, all types are allowed. If set, any other type raises ParseError.
+        max_depth: Maximum nesting depth for structured content (JSON, YAML, XML).
+            Overrides the module default (50). Set to 0 for flat-only.
+        max_size: Maximum content size in bytes. Overrides per-type defaults.
+        require_schema: If True, parse() raises ParseError when no schema is provided
+            for structured content types (JSON, YAML, XML).
+        patterns: Custom PatternRegistry. Overrides the patterns parameter on parse().
+        strip_injections: Whether to strip detected injection patterns from text content.
+
+    Example:
+        >>> policy = Policy(allowed_types={ContentType.JSON, ContentType.YAML},
+        ...                 max_depth=10, require_schema=True)
+        >>> parse('{"key": "value"}', "json", policy=policy, schema=my_schema)
+    """
+    allowed_types: frozenset[ContentType] | None = None
+    max_depth: int | None = None
+    max_size: int | None = None
+    require_schema: bool = False
+    patterns: PatternRegistry | None = None
+    strip_injections: bool = True
+
+
 _MAX_TEXT_SIZE = 1_000_000    # 1MB
 _MAX_JSON_SIZE = 10_000_000   # 10MB
 _MAX_JSON_DEPTH = 50
@@ -206,7 +239,7 @@ def _scan_json_strings(obj: Any, warnings: list[str], patterns: list[tuple[re.Pa
 
 # --- Content type parsers ---
 
-def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
+def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
     if len(raw) > _MAX_JSON_SIZE:
@@ -215,7 +248,7 @@ def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ParseError(f"Invalid JSON: {e}", content_type="json", violations=["invalid_json"]) from e
-    _check_json_depth(parsed)
+    _check_json_depth(parsed, max_depth=max_depth if max_depth is not None else _MAX_JSON_DEPTH)
     warnings: list[str] = []
     _scan_json_strings(parsed, warnings, patterns)
     return ParseResult(content=parsed, content_type=ContentType.JSON, sanitized=True, warnings=warnings)
@@ -259,7 +292,7 @@ def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True, patterns
     return ParseResult(content=raw, content_type=ContentType.MARKDOWN, sanitized=True, warnings=warnings, stripped=stripped)
 
 
-def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
+def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
     """Parse YAML content with depth limits and injection scanning.
 
     Uses PyYAML safe_load (no arbitrary Python object construction).
@@ -289,7 +322,7 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
         parsed = {}
 
     # Depth check (YAML can be deeply nested too)
-    _check_json_depth(parsed)
+    _check_json_depth(parsed, max_depth=max_depth if max_depth is not None else _MAX_JSON_DEPTH)
 
     warnings: list[str] = []
     _scan_json_strings(parsed, warnings, patterns)
@@ -299,7 +332,7 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
 _MAX_XML_SIZE = 10_000_000  # 10MB
 
 
-def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
+def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
     """Parse XML content with XXE protection and injection scanning.
 
     Security measures:
@@ -379,7 +412,7 @@ def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re
 
     parsed = _element_to_dict(root)
     # Check depth of the resulting dict
-    _check_json_depth(parsed)
+    _check_json_depth(parsed, max_depth=max_depth if max_depth is not None else _MAX_JSON_DEPTH)
 
     # Include root tag in result
     root_tag = root.tag
@@ -402,6 +435,7 @@ def parse(
     schema: Any | None = None,
     provenance: str = "",
     chain_id: str = "",
+    policy: Policy | None = None,
 ) -> ParseResult:
     """Parse and sanitize content for safe agent ingestion.
 
@@ -420,12 +454,16 @@ def parse(
             "api-gateway"). Propagated in the result for downstream consumers.
         chain_id: Correlation ID for tracking content through multi-hop flows.
             If empty, a new UUID is generated automatically.
+        policy: A Policy instance for structural enforcement. When provided,
+            the policy's settings override the corresponding parameters
+            (patterns, strip_injections). Content type and schema requirements
+            are enforced before parsing begins.
 
     Returns:
         ParseResult with sanitized content, taint metadata, and any warnings.
 
     Raises:
-        ParseError: If content fails validation.
+        ParseError: If content fails validation or violates the policy.
         SchemaError: If content fails schema validation.
 
     Example:
@@ -436,9 +474,10 @@ def parse(
         >>> result.taint
         <TaintLevel.SANITIZED: 'sanitized'>
 
-        >>> from secure_ingest import Schema, Field
+        >>> from secure_ingest import Schema, Field, Policy
+        >>> policy = Policy(allowed_types=frozenset({ContentType.JSON}), require_schema=True)
         >>> schema = Schema({"name": Field(str, required=True)})
-        >>> result = parse('{"name": "Alice"}', ContentType.JSON, schema=schema)
+        >>> result = parse('{"name": "Alice"}', ContentType.JSON, schema=schema, policy=policy)
         >>> result.taint
         <TaintLevel.VALIDATED: 'validated'>
     """
@@ -448,6 +487,40 @@ def parse(
         except ValueError:
             raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
+    # --- Policy enforcement (structural, before any parsing) ---
+    if policy is not None:
+        # Type restriction
+        if policy.allowed_types is not None and content_type not in policy.allowed_types:
+            allowed = ", ".join(t.value for t in sorted(policy.allowed_types, key=lambda t: t.value))
+            raise ParseError(
+                f"Content type '{content_type.value}' not allowed by policy (allowed: {allowed})",
+                content_type=content_type.value,
+                violations=["policy_type_denied"],
+            )
+
+        # Schema requirement for structured types
+        _structured_types = {ContentType.JSON, ContentType.YAML, ContentType.XML}
+        if policy.require_schema and content_type in _structured_types and schema is None:
+            raise ParseError(
+                f"Policy requires schema validation for {content_type.value} content",
+                content_type=content_type.value,
+                violations=["policy_schema_required"],
+            )
+
+        # Size enforcement (check before parsing)
+        raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+        if policy.max_size is not None and len(raw_str.encode("utf-8")) > policy.max_size:
+            raise ParseError(
+                f"Content exceeds policy size limit ({policy.max_size} bytes)",
+                content_type=content_type.value,
+                violations=["policy_size_exceeded"],
+            )
+
+        # Policy overrides for patterns and strip_injections
+        if policy.patterns is not None:
+            patterns = policy.patterns
+        strip_injections = policy.strip_injections
+
     # Resolve patterns to compiled list (None = use module defaults)
     compiled_patterns = patterns.get_patterns() if patterns is not None else None
 
@@ -455,16 +528,24 @@ def parse(
     if not chain_id:
         chain_id = uuid.uuid4().hex[:12]
 
+    # Override max depth if policy specifies it
+    original_max_depth = _MAX_JSON_DEPTH
+    if policy is not None and policy.max_depth is not None:
+        # Temporarily patch the module-level depth for this call
+        _override_depth = policy.max_depth
+    else:
+        _override_depth = None
+
     if content_type == ContentType.JSON:
-        result = _parse_json(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_json(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
     elif content_type == ContentType.TEXT:
         result = _parse_text(content, strip_injections=strip_injections, patterns=compiled_patterns)
     elif content_type == ContentType.MARKDOWN:
         result = _parse_markdown(content, strip_injections=strip_injections, patterns=compiled_patterns)
     elif content_type == ContentType.YAML:
-        result = _parse_yaml(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_yaml(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
     elif content_type == ContentType.XML:
-        result = _parse_xml(content, strict=strict, patterns=compiled_patterns)
+        result = _parse_xml(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
