@@ -19,6 +19,7 @@ from typing import Any
 from .anomaly import SemanticAnomalyDetector
 from .budget import BudgetExhaustedError, CycleDetectedError, RequestBudget
 from .parser import ContentParser, ParserConfig
+from .structure import StructureMonitor, StructureViolationError
 from .trust import ContentDecision, ContentEnvelope, TrustBoundary
 from .validator import SchemaValidator
 
@@ -37,6 +38,7 @@ class IngestResult:
     anomaly_details: dict[str, Any] | None = None
     audit_trail: list[dict[str, Any]] | None = None
     budget_snapshot: dict[str, Any] | None = None
+    structure_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -57,6 +59,8 @@ class IngestResult:
             d["audit_trail"] = self.audit_trail
         if self.budget_snapshot is not None:
             d["budget_snapshot"] = self.budget_snapshot
+        if self.structure_snapshot is not None:
+            d["structure_snapshot"] = self.structure_snapshot
         return d
 
 
@@ -79,12 +83,14 @@ class IngestionPipeline:
         validator: SchemaValidator | None = None,
         anomaly_detector: SemanticAnomalyDetector | None = None,
         budget: RequestBudget | None = None,
+        structure_monitor: StructureMonitor | None = None,
     ) -> None:
         self._trust = trust_boundary or TrustBoundary()
         self._parser = parser or ContentParser()
         self._validator = validator or SchemaValidator()
         self._anomaly = anomaly_detector or SemanticAnomalyDetector()
         self._budget = budget
+        self._structure = structure_monitor
 
     def ingest(
         self,
@@ -95,7 +101,7 @@ class IngestionPipeline:
     ) -> IngestResult:
         """Process a single piece of content through the full pipeline."""
 
-        # Stage 0: Budget enforcement (before any processing)
+        # Stage 0a: Budget enforcement (before any processing)
         if self._budget is not None:
             tool_name = f"ingest:{content_type}"
             try:
@@ -107,6 +113,21 @@ class IngestionPipeline:
                 self._trust.reject(envelope, f"budget_exceeded: {exc}")
                 result = self._build_result(envelope, include_audit)
                 result.budget_snapshot = self._budget.snapshot()
+                return result
+
+        # Stage 0b: Structure enforcement (before any processing)
+        if self._structure is not None:
+            tool_name = f"ingest:{content_type}"
+            try:
+                self._structure.check(tool_name)
+            except StructureViolationError as exc:
+                envelope = self._trust.admit(source_agent_id, content_type, raw_content)
+                envelope.audit("structure", "rejected", reason=str(exc))
+                self._trust.reject(envelope, f"structure_violation: {exc}")
+                result = self._build_result(envelope, include_audit)
+                result.structure_snapshot = self._structure.snapshot()
+                if self._budget is not None:
+                    result.budget_snapshot = self._budget.snapshot()
                 return result
 
         # Stage 1: Admission (trust boundary gate)
@@ -182,11 +203,15 @@ class IngestionPipeline:
             result = self._build_result(envelope, include_audit)
             if self._budget is not None:
                 result.budget_snapshot = self._budget.snapshot()
+            if self._structure is not None:
+                result.structure_snapshot = self._structure.snapshot()
             return result
 
         result = self._build_result(envelope, include_audit)
         if self._budget is not None:
             result.budget_snapshot = self._budget.snapshot()
+        if self._structure is not None:
+            result.structure_snapshot = self._structure.snapshot()
         return result
 
     def _build_result(

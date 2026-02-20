@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from secure_ingest.budget import BudgetConfig, RequestBudget
 from secure_ingest.pipeline import IngestionPipeline, IngestResult
+from secure_ingest.structure import StructureMonitor, ToolGraph
 
 
 @pytest.fixture
@@ -226,3 +227,118 @@ class TestBudgetIntegration:
         r4 = pipe.ingest("d", "security_finding", VALID_FINDING_JSON)
         assert r4.decision == "rejected"
         assert budget.total_calls == 3  # 4th was rejected before recording
+
+
+class TestStructureIntegration:
+    """Tests for StructureMonitor integration with the ingestion pipeline."""
+
+    def test_no_structure_by_default(self, pipeline):
+        result = pipeline.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert result.structure_snapshot is None
+
+    def test_structure_snapshot_included_when_monitor_set(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+            transitions={"ingest:security_finding": frozenset({"ingest:analysis_report"})},
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        result = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert result.structure_snapshot is not None
+        assert result.structure_snapshot["total_calls"] == 1
+
+    def test_allowed_transition_succeeds(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+            transitions={
+                "ingest:security_finding": frozenset({"ingest:analysis_report"}),
+            },
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        r1 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        r2 = pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        assert r1.decision == "accepted"
+        assert r2.decision == "accepted"
+
+    def test_disallowed_entry_point_rejects(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:analysis_report"}),
+            transitions={},
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        result = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert result.decision == "rejected"
+        assert result.validated_content is None
+        assert result.structure_snapshot is not None
+
+    def test_disallowed_transition_rejects(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+            transitions={
+                "ingest:security_finding": frozenset({"ingest:security_finding"}),
+            },
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        r1 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r1.decision == "accepted"
+        # analysis_report is not an allowed transition from security_finding
+        r2 = pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        assert r2.decision == "rejected"
+        assert r2.validated_content is None
+
+    def test_structure_audit_trail_includes_stage(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:analysis_report"}),
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        result = pipe.ingest(
+            "agent-001", "security_finding", VALID_FINDING_JSON, include_audit=True
+        )
+        assert result.audit_trail is not None
+        stages = [e["stage"] for e in result.audit_trail]
+        assert "structure" in stages
+
+    def test_structure_snapshot_serializable(self):
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+        )
+        monitor = StructureMonitor(graph)
+        pipe = IngestionPipeline(structure_monitor=monitor)
+        result = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        d = result.to_dict()
+        assert "structure_snapshot" in d
+        json.dumps(d, default=str)
+
+    def test_budget_and_structure_together(self):
+        """Both budget and structure can be used simultaneously."""
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+            transitions={"ingest:security_finding": frozenset({"ingest:analysis_report"})},
+        )
+        monitor = StructureMonitor(graph)
+        budget = RequestBudget(BudgetConfig(max_calls=10))
+        pipe = IngestionPipeline(budget=budget, structure_monitor=monitor)
+        r1 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r1.decision == "accepted"
+        assert r1.budget_snapshot is not None
+        assert r1.structure_snapshot is not None
+
+    def test_budget_checked_before_structure(self):
+        """Budget is checked first — exhausted budget rejects before structure check."""
+        graph = ToolGraph(
+            entry_points=frozenset({"ingest:security_finding"}),
+        )
+        monitor = StructureMonitor(graph)
+        budget = RequestBudget(BudgetConfig(max_calls=1))
+        pipe = IngestionPipeline(budget=budget, structure_monitor=monitor)
+        pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        # Budget exhausted — second call rejected without touching structure
+        r2 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r2.decision == "rejected"
+        assert r2.budget_snapshot is not None
+        # Structure monitor should still show only 1 call (budget rejected before structure)
+        assert monitor.snapshot()["total_calls"] == 1

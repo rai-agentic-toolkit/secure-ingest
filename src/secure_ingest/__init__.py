@@ -19,7 +19,7 @@ from .structure import (
     ToolGraph, StructureMonitor, StructureViolationError,
 )
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 __all__ = [
     "parse", "compose", "ParseResult", "ParseError", "ContentType", "TaintLevel",
     "Policy", "DenyRule", "AllowRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
