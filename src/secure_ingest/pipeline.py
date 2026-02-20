@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .anomaly import SemanticAnomalyDetector
+from .budget import BudgetExhaustedError, CycleDetectedError, RequestBudget
 from .parser import ContentParser, ParserConfig
 from .trust import ContentDecision, ContentEnvelope, TrustBoundary
 from .validator import SchemaValidator
@@ -35,6 +36,7 @@ class IngestResult:
     anomaly_score: float = 0.0
     anomaly_details: dict[str, Any] | None = None
     audit_trail: list[dict[str, Any]] | None = None
+    budget_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -53,6 +55,8 @@ class IngestResult:
             d["anomaly_details"] = self.anomaly_details
         if self.audit_trail:
             d["audit_trail"] = self.audit_trail
+        if self.budget_snapshot is not None:
+            d["budget_snapshot"] = self.budget_snapshot
         return d
 
 
@@ -74,11 +78,13 @@ class IngestionPipeline:
         parser: ContentParser | None = None,
         validator: SchemaValidator | None = None,
         anomaly_detector: SemanticAnomalyDetector | None = None,
+        budget: RequestBudget | None = None,
     ) -> None:
         self._trust = trust_boundary or TrustBoundary()
         self._parser = parser or ContentParser()
         self._validator = validator or SchemaValidator()
         self._anomaly = anomaly_detector or SemanticAnomalyDetector()
+        self._budget = budget
 
     def ingest(
         self,
@@ -88,6 +94,20 @@ class IngestionPipeline:
         include_audit: bool = False,
     ) -> IngestResult:
         """Process a single piece of content through the full pipeline."""
+
+        # Stage 0: Budget enforcement (before any processing)
+        if self._budget is not None:
+            tool_name = f"ingest:{content_type}"
+            try:
+                self._budget.record(tool_name)
+            except (BudgetExhaustedError, CycleDetectedError) as exc:
+                # Create a minimal envelope for the rejection
+                envelope = self._trust.admit(source_agent_id, content_type, raw_content)
+                envelope.audit("budget", "rejected", reason=str(exc))
+                self._trust.reject(envelope, f"budget_exceeded: {exc}")
+                result = self._build_result(envelope, include_audit)
+                result.budget_snapshot = self._budget.snapshot()
+                return result
 
         # Stage 1: Admission (trust boundary gate)
         envelope = self._trust.admit(source_agent_id, content_type, raw_content)
@@ -159,9 +179,15 @@ class IngestionPipeline:
         # Stage 5: Promote to TRUSTED
         if not self._trust.promote_to_trusted(envelope):
             self._trust.reject(envelope, "promotion_to_trusted_failed")
-            return self._build_result(envelope, include_audit)
+            result = self._build_result(envelope, include_audit)
+            if self._budget is not None:
+                result.budget_snapshot = self._budget.snapshot()
+            return result
 
-        return self._build_result(envelope, include_audit)
+        result = self._build_result(envelope, include_audit)
+        if self._budget is not None:
+            result.budget_snapshot = self._budget.snapshot()
+        return result
 
     def _build_result(
         self, envelope: ContentEnvelope, include_audit: bool

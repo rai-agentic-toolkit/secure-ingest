@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from secure_ingest.budget import BudgetConfig, RequestBudget
 from secure_ingest.pipeline import IngestionPipeline, IngestResult
 
 
@@ -129,3 +130,99 @@ class TestToDict:
         d = result.to_dict()
         assert d["decision"] == "rejected"
         json.dumps(d, default=str)
+
+
+class TestBudgetIntegration:
+    """Tests for RequestBudget integration with the ingestion pipeline."""
+
+    def test_no_budget_by_default(self, pipeline):
+        result = pipeline.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert result.budget_snapshot is None
+
+    def test_budget_snapshot_included_when_budget_set(self):
+        budget = RequestBudget(BudgetConfig(max_calls=10))
+        pipe = IngestionPipeline(budget=budget)
+        result = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert result.budget_snapshot is not None
+        assert result.budget_snapshot["total_calls"] == 1
+
+    def test_budget_tracks_content_type_in_tool_name(self):
+        budget = RequestBudget(BudgetConfig(max_calls=10))
+        pipe = IngestionPipeline(budget=budget)
+        pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        snapshot = budget.snapshot()
+        assert "ingest:security_finding" in snapshot["tool_counts"]
+        assert "ingest:analysis_report" in snapshot["tool_counts"]
+
+    def test_budget_exhausted_rejects(self):
+        budget = RequestBudget(BudgetConfig(max_calls=2))
+        pipe = IngestionPipeline(budget=budget)
+        r1 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        r2 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r1.decision == "accepted"
+        assert r2.decision == "accepted"
+        # Third call exceeds budget
+        r3 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r3.decision == "rejected"
+        assert r3.budget_snapshot is not None
+
+    def test_budget_exhausted_no_content_leaked(self):
+        budget = RequestBudget(BudgetConfig(max_calls=1))
+        pipe = IngestionPipeline(budget=budget)
+        pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        r2 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r2.decision == "rejected"
+        assert r2.validated_content is None
+
+    def test_per_tool_budget_exhausted(self):
+        budget = RequestBudget(BudgetConfig(max_calls_per_tool=1))
+        pipe = IngestionPipeline(budget=budget)
+        r1 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r1.decision == "accepted"
+        # Same content type again exceeds per-tool limit
+        r2 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        assert r2.decision == "rejected"
+        # Different content type still works
+        r3 = pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        assert r3.decision == "accepted"
+
+    def test_cycle_detection_rejects(self):
+        budget = RequestBudget(BudgetConfig(max_cycle_repeats=2, min_cycle_length=2))
+        pipe = IngestionPipeline(budget=budget)
+        # Create a cycle: finding, report, finding, report, finding, report
+        for _ in range(2):
+            pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+            pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        # Third repetition triggers cycle detection
+        pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        r = pipe.ingest("agent-002", "analysis_report", VALID_REPORT_JSON)
+        assert r.decision == "rejected"
+
+    def test_budget_audit_trail_includes_budget_stage(self):
+        budget = RequestBudget(BudgetConfig(max_calls=1))
+        pipe = IngestionPipeline(budget=budget)
+        pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        r2 = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON, include_audit=True)
+        assert r2.audit_trail is not None
+        stages = [e["stage"] for e in r2.audit_trail]
+        assert "budget" in stages
+
+    def test_budget_snapshot_serializable(self):
+        budget = RequestBudget(BudgetConfig(max_calls=10))
+        pipe = IngestionPipeline(budget=budget)
+        result = pipe.ingest("agent-001", "security_finding", VALID_FINDING_JSON)
+        d = result.to_dict()
+        assert "budget_snapshot" in d
+        json.dumps(d, default=str)
+
+    def test_budget_shared_across_ingest_calls(self):
+        """Budget is stateful — tracks calls across the pipeline's lifetime."""
+        budget = RequestBudget(BudgetConfig(max_calls=3))
+        pipe = IngestionPipeline(budget=budget)
+        pipe.ingest("a", "security_finding", VALID_FINDING_JSON)
+        pipe.ingest("b", "security_finding", VALID_FINDING_JSON)
+        pipe.ingest("c", "security_finding", VALID_FINDING_JSON)
+        r4 = pipe.ingest("d", "security_finding", VALID_FINDING_JSON)
+        assert r4.decision == "rejected"
+        assert budget.total_calls == 3  # 4th was rejected before recording

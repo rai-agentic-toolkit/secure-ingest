@@ -14,8 +14,9 @@ from .budget import (
     BudgetConfig, RequestBudget,
     BudgetExhaustedError, CycleDetectedError,
 )
+from .pipeline import IngestionPipeline, IngestResult
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 __all__ = [
     "parse", "compose", "ParseResult", "ParseError", "ContentType", "TaintLevel",
     "Policy", "DenyRule", "AllowRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
@@ -25,4 +26,5 @@ __all__ = [
     "policy_to_yaml", "policy_from_yaml",
     "BudgetConfig", "RequestBudget",
     "BudgetExhaustedError", "CycleDetectedError",
+    "IngestionPipeline", "IngestResult",
 ]
