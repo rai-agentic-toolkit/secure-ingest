@@ -166,6 +166,10 @@ class PatternRegistry:
         """Return names of all active patterns."""
         return list(self._patterns.keys())
 
+    def get_all(self) -> list[InjectionPattern]:
+        """Return all active InjectionPattern instances."""
+        return list(self._patterns.values())
+
     def __len__(self) -> int:
         return len(self._patterns)
 
@@ -176,6 +180,28 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 @dataclass(frozen=True)
+class DenyRule:
+    """A declarative content-level deny rule.
+
+    Unlike injection patterns (which strip matches), deny rules reject
+    the entire content if any match is found. This implements the PCAS
+    principle: prevent policy violations before execution, not after.
+
+    Args:
+        name: Unique rule identifier (e.g., "no_pii", "no_credentials").
+        pattern: Regex pattern string. Content matching this is denied.
+        description: Human-readable explanation of why this rule exists.
+    """
+    name: str
+    pattern: str
+    description: str = ""
+
+    @property
+    def compiled(self) -> re.Pattern[str]:
+        return re.compile(self.pattern)
+
+
+@dataclass(frozen=True)
 class Policy:
     """Structural policy enforcement for content ingestion.
 
@@ -183,6 +209,18 @@ class Policy:
     principle of "structural enforcement over runtime detection." Instead of
     relying on consumers to check results, the policy prevents disallowed
     content from being parsed at all.
+
+    Policies can be composed via ``Policy.compose()`` to layer enforcement
+    (e.g., org-level + agent-level + content-specific). Composition uses
+    most-restrictive-wins semantics:
+
+    - ``allowed_types``: intersection (only types allowed by ALL policies)
+    - ``max_depth``: minimum non-None value
+    - ``max_size``: minimum non-None value
+    - ``require_schema``: True if ANY policy requires it
+    - ``strip_injections``: True if ANY policy enables it
+    - ``deny_rules``: union (all rules from all policies, deduplicated by name)
+    - ``patterns``: merged (all patterns from all policies)
 
     Args:
         allowed_types: Set of ContentType values that are permitted.
@@ -194,11 +232,25 @@ class Policy:
             for structured content types (JSON, YAML, XML).
         patterns: Custom PatternRegistry. Overrides the patterns parameter on parse().
         strip_injections: Whether to strip detected injection patterns from text content.
+        deny_rules: Tuple of DenyRule instances. If any rule matches raw content,
+            the entire parse is rejected with a ParseError listing the violated rules.
+            Checked against raw content BEFORE parsing — structural enforcement.
 
     Example:
         >>> policy = Policy(allowed_types={ContentType.JSON, ContentType.YAML},
         ...                 max_depth=10, require_schema=True)
         >>> parse('{"key": "value"}', "json", policy=policy, schema=my_schema)
+
+        >>> no_secrets = DenyRule("no_api_keys", r"(?i)api[_-]?key\\s*[:=]\\s*\\S+")
+        >>> policy = Policy(deny_rules=(no_secrets,))
+        >>> parse("api_key=sk-abc123", "text", policy=policy)  # raises ParseError
+
+        >>> # Layered composition: org + agent policies
+        >>> org = Policy(allowed_types=frozenset({ContentType.JSON, ContentType.TEXT}),
+        ...              max_size=10000, deny_rules=(no_secrets,))
+        >>> agent = Policy(allowed_types=frozenset({ContentType.JSON}), max_depth=5)
+        >>> combined = Policy.compose(org, agent)
+        >>> # combined: only JSON, max_size=10000, max_depth=5, deny_rules=(no_secrets,)
     """
     allowed_types: frozenset[ContentType] | None = None
     max_depth: int | None = None
@@ -206,6 +258,86 @@ class Policy:
     require_schema: bool = False
     patterns: PatternRegistry | None = None
     strip_injections: bool = True
+    deny_rules: tuple[DenyRule, ...] = ()
+
+    @staticmethod
+    def compose(*policies: "Policy") -> "Policy":
+        """Compose multiple policies with most-restrictive-wins semantics.
+
+        This enables layered policy enforcement: an organization can define
+        a base policy, teams can add restrictions, and individual agents can
+        further tighten constraints. No layer can loosen what a higher layer
+        restricts — security only tightens.
+
+        Args:
+            *policies: Two or more Policy instances to compose.
+
+        Returns:
+            A new Policy with the combined (most restrictive) constraints.
+
+        Raises:
+            ValueError: If fewer than 2 policies are provided.
+            ValueError: If composed allowed_types would be empty (no types allowed).
+        """
+        if len(policies) < 2:
+            raise ValueError("Policy.compose() requires at least 2 policies")
+
+        # allowed_types: intersection of all non-None sets
+        # If all are None → None (allow all). If any is non-None → intersect.
+        type_sets = [p.allowed_types for p in policies if p.allowed_types is not None]
+        if not type_sets:
+            allowed_types = None
+        else:
+            allowed_types = type_sets[0]
+            for ts in type_sets[1:]:
+                allowed_types = allowed_types & ts
+            if not allowed_types:
+                raise ValueError(
+                    "Policy.compose() resulted in empty allowed_types — "
+                    "no content type is permitted by all policies"
+                )
+            allowed_types = frozenset(allowed_types)
+
+        # max_depth: minimum non-None value
+        depths = [p.max_depth for p in policies if p.max_depth is not None]
+        max_depth = min(depths) if depths else None
+
+        # max_size: minimum non-None value
+        sizes = [p.max_size for p in policies if p.max_size is not None]
+        max_size = min(sizes) if sizes else None
+
+        # require_schema: True if ANY policy requires it
+        require_schema = any(p.require_schema for p in policies)
+
+        # strip_injections: True if ANY policy enables it
+        strip_injections = any(p.strip_injections for p in policies)
+
+        # deny_rules: union, deduplicated by name (last wins on name collision)
+        seen_rules: dict[str, DenyRule] = {}
+        for p in policies:
+            for rule in p.deny_rules:
+                seen_rules[rule.name] = rule
+        deny_rules = tuple(seen_rules.values())
+
+        # patterns: merge all registries into one
+        registries = [p.patterns for p in policies if p.patterns is not None]
+        if not registries:
+            merged_patterns = None
+        else:
+            merged_patterns = PatternRegistry(include_builtins=False)
+            for reg in registries:
+                for pattern in reg.get_all():
+                    merged_patterns.add(pattern)
+
+        return Policy(
+            allowed_types=allowed_types,
+            max_depth=max_depth,
+            max_size=max_size,
+            require_schema=require_schema,
+            patterns=merged_patterns,
+            strip_injections=strip_injections,
+            deny_rules=deny_rules,
+        )
 
 
 _MAX_TEXT_SIZE = 1_000_000    # 1MB
@@ -540,6 +672,18 @@ def parse(
                 content_type=content_type.value,
                 violations=["policy_size_exceeded"],
             )
+
+        # Deny rules — reject content matching any rule (before parsing)
+        if policy.deny_rules:
+            raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+            violated = [rule.name for rule in policy.deny_rules if rule.compiled.search(raw_str)]
+            if violated:
+                names = ", ".join(violated)
+                raise ParseError(
+                    f"Content denied by policy rules: {names}",
+                    content_type=content_type.value,
+                    violations=[f"policy_deny:{name}" for name in violated],
+                )
 
         # Policy overrides for patterns and strip_injections
         if policy.patterns is not None:
