@@ -18,8 +18,9 @@ from .pipeline import IngestionPipeline, IngestResult
 from .structure import (
     ToolGraph, StructureMonitor, StructureViolationError,
 )
+from .reliability import ReliabilityProfiler, ReliabilityReport, DimensionScore
 
-__version__ = "0.9.1"
+__version__ = "1.0.0"
 __all__ = [
     "parse", "compose", "ParseResult", "ParseError", "ContentType", "TaintLevel",
     "Policy", "DenyRule", "AllowRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
@@ -31,4 +32,5 @@ __all__ = [
     "BudgetExhaustedError", "CycleDetectedError",
     "IngestionPipeline", "IngestResult",
     "ToolGraph", "StructureMonitor", "StructureViolationError",
+    "ReliabilityProfiler", "ReliabilityReport", "DimensionScore",
 ]
