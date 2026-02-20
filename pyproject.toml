@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "secure-ingest"
-version = "0.2.0"
+version = "0.9.2"
 description = "Stateless sandboxed content parser for AI agent ingestion — prevents prompt injection"
 readme = "README.md"
 license = "MIT"
