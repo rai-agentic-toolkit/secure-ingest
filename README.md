@@ -4,7 +4,7 @@ Stateless sandboxed content parser for AI agent ingestion.
 Prevents prompt injection at the architectural level — with taint tracking,
 policy enforcement, and composition safety for multi-agent flows.
 
-**Zero required dependencies. Pure Python 3.10+. 211 tests.**
+**Zero required dependencies. Pure Python 3.10+. 363 tests.**
 
 ## Install
 
@@ -111,15 +111,22 @@ if result.taint >= TaintLevel.SANITIZED:
     ...
 ```
 
-### Provenance
+### Provenance & Integrity
 
-Track where content came from:
+Track where content came from and verify it hasn't been tampered with:
 
 ```python
 result = parse(content, "json", provenance="api.example.com/v1/data")
-print(result.provenance)  # 'api.example.com/v1/data'
-print(result.chain_id)    # auto-generated correlation ID
+print(result.provenance)     # 'api.example.com/v1/data'
+print(result.chain_id)       # auto-generated correlation ID
+print(result.content_hash)   # SHA-256 digest of parsed content
+
+# Verify integrity downstream
+assert result.verify()  # True if content matches stored hash
 ```
+
+Content hashing is deterministic (JSON uses sorted keys) and works on all
+content types including `compose()` results.
 
 ## Composition Safety
 
@@ -141,14 +148,15 @@ print(combined.content)     # list of all parsed contents
 print(combined.warnings)    # aggregated warnings from all inputs
 ```
 
-## Policy Profiles
+## Policy Enforcement
+
+### Structural Constraints
 
 Enforce structural constraints per-call — no runtime detection needed:
 
 ```python
 from secure_ingest import parse, Policy, ContentType
 
-# Strict policy: only JSON/YAML, require schema, limit size
 strict = Policy(
     allowed_types=frozenset({ContentType.JSON, ContentType.YAML}),
     max_size=1024 * 100,       # 100KB limit
@@ -157,19 +165,108 @@ strict = Policy(
 )
 
 result = parse(content, "json", policy=strict, schema=my_schema)
-
-# Policy rejects disallowed types before parsing (structural enforcement)
 parse(content, "text", policy=strict)  # raises ParseError immediately
 ```
 
-Policy fields:
+### Deny Rules
 
-- **`allowed_types`** — frozenset of `ContentType`. Rejects before parsing.
-- **`max_depth`** — override default nesting limit.
-- **`max_size`** — content size limit in bytes.
-- **`require_schema`** — force schema validation on structured types.
-- **`patterns`** — custom `PatternRegistry` override.
-- **`strip_injections`** — toggle injection stripping for text types.
+Block content matching specific patterns before parsing:
+
+```python
+from secure_ingest import Policy, DenyRule
+
+policy = Policy(deny_rules=(
+    DenyRule(name="ssn", pattern=r"\d{3}-\d{2}-\d{4}", description="Block SSNs"),
+    DenyRule(name="pii_email", pattern=r"\S+@\S+\.\S+", description="Block emails"),
+))
+
+# Content matching ANY deny rule is rejected with ParseError
+# Violations listed in error.violations as 'policy_deny:<name>'
+```
+
+### Allow Rules
+
+Require content to match specific patterns (must match ALL):
+
+```python
+from secure_ingest import Policy, AllowRule
+
+policy = Policy(allow_rules=(
+    AllowRule(name="has_id", pattern=r'"id"\s*:', description="Must contain ID field"),
+))
+
+# Content missing ANY allow rule is rejected with ParseError
+# Violations listed as 'policy_allow:<name>'
+```
+
+Deny rules are checked first — deny always takes priority over allow.
+
+### Policy Composition
+
+Layer multiple policies with most-restrictive-wins semantics:
+
+```python
+org_policy = Policy(max_size=1024 * 1024, max_depth=10)
+team_policy = Policy(max_size=1024 * 100, require_schema=True)
+
+combined = Policy.compose(org_policy, team_policy)
+# max_size=102400 (smaller wins), max_depth=10, require_schema=True
+# allowed_types: intersection, deny/allow_rules: union
+```
+
+Composition can only tighten constraints, never loosen them. Raises `ValueError`
+if the resulting policy would allow zero content types.
+
+### Policy Serialization
+
+Load policies from config files:
+
+```python
+from secure_ingest import policy_from_yaml, policy_to_yaml
+
+# Load from YAML
+policy = policy_from_yaml("""
+allowed_types: [json, yaml]
+max_size: 102400
+max_depth: 5
+require_schema: true
+deny_rules:
+  - name: ssn
+    pattern: '\\d{3}-\\d{2}-\\d{4}'
+    description: Block SSNs
+allow_rules:
+  - name: has_id
+    pattern: '"id"\\s*:'
+    description: Must contain ID field
+""")
+
+# Round-trip: also supports policy_to_json / policy_from_json / policy_to_dict / policy_from_dict
+yaml_str = policy_to_yaml(policy)
+```
+
+## CLI
+
+```bash
+# Scan content for injections
+secure-ingest scan content.json
+
+# Scan with policy enforcement
+secure-ingest scan --policy policy.yaml content.json
+
+# Full ingestion pipeline (parse + validate + anomaly detection)
+secure-ingest ingest --type security_finding --agent agent-001 content.json
+
+# Ingest with policy
+secure-ingest ingest --policy policy.yaml --type security_finding content.json
+
+# Read from stdin
+echo '{"data": "test"}' | secure-ingest ingest --type security_finding --stdin
+
+# List available schemas
+secure-ingest schemas
+```
+
+All commands output structured JSON. Exit codes: 0 = accepted, 1 = rejected, 2 = quarantined.
 
 ## Schema Validation
 
@@ -196,9 +293,6 @@ result = parse(json_content, "json", schema=schema)
 
 ### `parse(content, content_type, **kwargs)`
 
-Keyword arguments: `max_size`, `max_depth`, `patterns`, `schema`,
-`policy`, `provenance`, `chain_id`.
-
 Parse and sanitize untrusted content.
 
 - **content** — `str` or `bytes` to parse
@@ -212,7 +306,7 @@ Parse and sanitize untrusted content.
 - **chain_id** — correlation ID (auto-generated if not provided)
 
 Returns `ParseResult` with fields: `content`, `content_type`, `sanitized`,
-`warnings`, `stripped`, `taint`, `provenance`, `chain_id`.
+`warnings`, `stripped`, `taint`, `provenance`, `chain_id`, `content_hash`.
 
 Raises `ParseError` on validation failure, `SchemaError` on schema violations.
 
@@ -221,21 +315,53 @@ Raises `ParseError` on validation failure, `SchemaError` on schema violations.
 Safely combine multiple `ParseResult` objects. Returns a new `ParseResult`
 with minimum taint, merged provenance, and aggregated warnings.
 
+### `ParseResult`
+
+- `verify()` — returns `True` if content still matches its `content_hash`
+- `content_hash` — SHA-256 hex digest (64 chars) of parsed content
+
+### `Policy`
+
+```python
+Policy(
+    allowed_types=None,      # frozenset of ContentType
+    max_depth=None,          # int
+    max_size=None,           # int (bytes)
+    require_schema=False,    # bool
+    patterns=None,           # PatternRegistry
+    strip_injections=True,   # bool
+    deny_rules=(),           # tuple of DenyRule
+    allow_rules=(),          # tuple of AllowRule
+)
+```
+
+- `Policy.compose(*policies)` — merge with most-restrictive-wins semantics
+
+### `DenyRule(name, pattern, description="")`
+
+Regex pattern that rejects content if matched. Checked on raw content before parsing.
+
+### `AllowRule(name, pattern, description="")`
+
+Regex pattern that content must match. Checked after deny rules, before parsing.
+
 ### `TaintLevel`
 
 Enum: `UNTRUSTED`, `SANITIZED`, `VALIDATED`. Supports comparison operators.
 
-### `Policy(allowed_types=None, max_depth=None, max_size=None, require_schema=False, patterns=None, strip_injections=True)`
-
-Structural enforcement constraints. Applied before parsing begins.
-
 ### `PatternRegistry(include_builtins=True)`
 
-Manage injection detection patterns. Methods: `add()`, `disable()`, `get_patterns()`.
+Manage injection detection patterns. Methods: `add()`, `disable()`, `get_patterns()`, `get_all()`.
 
 ### `Schema(fields, allow_extra=False)`
 
 Define expected content shape. `Field(type_, required, nullable, choices, nested, items)`.
+
+### Serialization Functions
+
+- `policy_to_dict(policy)` / `policy_from_dict(d)` — dict round-tripping
+- `policy_to_json(policy)` / `policy_from_json(s)` — JSON string I/O
+- `policy_to_yaml(policy)` / `policy_from_yaml(s)` — YAML string I/O (requires PyYAML)
 
 ## Security Model
 
@@ -252,7 +378,9 @@ Inspired by the PCAS (Policy Compiler for Agentic Systems) research approach.
 - ZIP bomb / deeply nested structure attacks
 - HTML injection in markdown content
 - Taint confusion in multi-agent pipelines (via taint tracking)
+- Content tampering (via SHA-256 integrity hashing)
 - Policy drift (via structural enforcement with `Policy`)
+- Data exfiltration patterns (via deny rules)
 
 **What it doesn't do:**
 
