@@ -815,6 +815,7 @@ class ParserConfig:
     """Configuration for the ContentParser."""
     strict: bool = True
     strip_injections: bool = True
+    policy: Policy | None = None
 
 
 @dataclass
@@ -855,6 +856,7 @@ class ContentParser:
                 parser_type,
                 strict=self._config.strict,
                 strip_injections=self._config.strip_injections,
+                policy=self._config.policy,
             )
             # For JSON content, .content is already a dict.
             # For text/markdown, wrap it so downstream expects dict.

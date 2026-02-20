@@ -3,8 +3,10 @@
 Usage:
     secure-ingest ingest --type security_finding --agent agent-001 content.json
     secure-ingest ingest --type security_finding --agent agent-001 --stdin < content.json
+    secure-ingest ingest --policy policy.yaml --type security_finding --agent agent-001 content.json
     secure-ingest validate --type security_finding content.json
     secure-ingest scan content.json
+    secure-ingest scan --policy policy.yaml content.json
     secure-ingest schemas
     echo '{"vulnerability_id": "CVE-2024-1234", ...}' | secure-ingest ingest --type security_finding --agent test --stdin
 """
@@ -17,9 +19,34 @@ import sys
 from pathlib import Path
 
 from .anomaly import SemanticAnomalyDetector
+from .parser import ContentParser, ParserConfig, Policy
 from .pipeline import IngestionPipeline
 from .schemas import SCHEMA_REGISTRY
 from .validator import SchemaValidator
+
+
+def _load_policy(path_str: str) -> Policy:
+    """Load a Policy from a YAML or JSON file."""
+    path = Path(path_str)
+    if not path.exists():
+        print(f"Error: policy file not found: {path_str}", file=sys.stderr)
+        sys.exit(1)
+
+    suffix = path.suffix.lower()
+    content = path.read_text(encoding="utf-8")
+
+    if suffix in (".yaml", ".yml"):
+        from .serialization import policy_from_yaml
+        return policy_from_yaml(content)
+    elif suffix == ".json":
+        from .serialization import policy_from_json
+        return policy_from_json(content)
+    else:
+        print(
+            f"Error: unsupported policy file format '{suffix}' (use .yaml, .yml, or .json)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
                           help="Content type")
     p_ingest.add_argument("--agent", "-a", default="unknown", help="Source agent ID")
     p_ingest.add_argument("--audit", action="store_true", help="Include audit trail in output")
+    p_ingest.add_argument("--policy", "-p", help="Path to policy file (YAML or JSON)")
 
     # --- validate command ---
     p_validate = sub.add_parser("validate", help="Validate content against a schema (no anomaly detection)")
@@ -48,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     p_scan = sub.add_parser("scan", help="Scan content for prompt injection patterns")
     p_scan.add_argument("file", nargs="?", help="Path to content file")
     p_scan.add_argument("--stdin", action="store_true", help="Read from stdin")
+    p_scan.add_argument("--policy", "-p", help="Path to policy file (YAML or JSON)")
 
     # --- schemas command ---
     sub.add_parser("schemas", help="List available content schemas")
@@ -101,7 +130,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     if content is None:
         return 1
 
-    pipeline = IngestionPipeline()
+    policy = None
+    if args.policy:
+        policy = _load_policy(args.policy)
+
+    config = ParserConfig(policy=policy) if policy else None
+    parser = ContentParser(config) if config else None
+    pipeline = IngestionPipeline(parser=parser)
+
     result = pipeline.ingest(
         source_agent_id=args.agent,
         content_type=args.type,
@@ -149,7 +185,41 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     if content is None:
         return 1
 
-    # Try to parse as JSON, fall back to treating as raw text
+    # If a policy is provided, use the parser with policy enforcement
+    if getattr(args, "policy", None):
+        from .parser import parse as parse_content, ContentType, ParseError
+
+        policy = _load_policy(args.policy)
+
+        # Try to detect content type
+        try:
+            json.loads(content)
+            ct = ContentType.JSON
+        except (json.JSONDecodeError, ValueError):
+            ct = ContentType.TEXT
+
+        try:
+            result = parse_content(content, ct, policy=policy)
+            output = {
+                "policy_applied": True,
+                "taint": result.taint.value,
+                "injections_stripped": len(result.warnings),
+                "warnings": list(result.warnings),
+                "content_hash": result.content_hash,
+            }
+            print(json.dumps(output, indent=2))
+            return 0
+        except ParseError as e:
+            output = {
+                "policy_applied": True,
+                "rejected": True,
+                "error": str(e),
+                "violations": list(e.violations) if hasattr(e, "violations") else [],
+            }
+            print(json.dumps(output, indent=2))
+            return 1
+
+    # Default: anomaly detection scan
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
