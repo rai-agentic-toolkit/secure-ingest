@@ -9,6 +9,7 @@ Design principles:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -62,6 +63,19 @@ class ParseError(Exception):
         self.violations = violations or []
 
 
+def _compute_content_hash(content: Any) -> str:
+    """Compute a SHA-256 digest of content for integrity verification.
+
+    Deterministic: same content always produces the same hash,
+    regardless of dict key ordering (uses sort_keys for JSON).
+    """
+    if isinstance(content, (str, bytes)):
+        raw = content.encode("utf-8") if isinstance(content, str) else content
+    else:
+        raw = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 @dataclass(frozen=True)
 class ParseResult:
     """Immutable result from parsing content."""
@@ -73,6 +87,17 @@ class ParseResult:
     taint: TaintLevel = TaintLevel.SANITIZED
     provenance: str = ""
     chain_id: str = ""
+    content_hash: str = ""
+
+    def verify(self) -> bool:
+        """Verify content integrity against the stored hash.
+
+        Returns True if the content hash matches, False if it doesn't.
+        Returns True if no hash was set (backwards compatibility).
+        """
+        if not self.content_hash:
+            return True
+        return self.content_hash == _compute_content_hash(self.content)
 
 
 # --- Injection pattern system ---
@@ -557,7 +582,7 @@ def parse(
         schema.validate(result.content)
         taint = TaintLevel.VALIDATED
 
-    # Return result with taint metadata applied
+    # Return result with taint metadata and integrity hash
     return ParseResult(
         content=result.content,
         content_type=result.content_type,
@@ -567,6 +592,7 @@ def parse(
         taint=taint,
         provenance=provenance,
         chain_id=chain_id,
+        content_hash=_compute_content_hash(result.content),
     )
 
 
@@ -636,6 +662,7 @@ def compose(*results: ParseResult, chain_id: str = "") -> ParseResult:
         taint=taint,
         provenance=provenance,
         chain_id=chain_id,
+        content_hash=_compute_content_hash(contents),
     )
 
 

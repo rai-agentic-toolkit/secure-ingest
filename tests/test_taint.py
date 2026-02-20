@@ -176,6 +176,81 @@ class TestCompose:
         assert combined.provenance == "json-src,text-src"
 
 
+class TestContentHash:
+    """Tests for content_hash integrity verification."""
+
+    def test_hash_present_on_parse_result(self):
+        result = parse("hello", ContentType.TEXT)
+        assert result.content_hash != ""
+        assert len(result.content_hash) == 64  # SHA-256 hex
+
+    def test_hash_deterministic(self):
+        """Same content always produces the same hash."""
+        r1 = parse("hello", ContentType.TEXT)
+        r2 = parse("hello", ContentType.TEXT)
+        assert r1.content_hash == r2.content_hash
+
+    def test_hash_differs_for_different_content(self):
+        r1 = parse("hello", ContentType.TEXT)
+        r2 = parse("world", ContentType.TEXT)
+        assert r1.content_hash != r2.content_hash
+
+    def test_hash_on_json(self):
+        result = parse('{"a": 1, "b": 2}', ContentType.JSON)
+        assert result.content_hash != ""
+        assert len(result.content_hash) == 64
+
+    def test_json_hash_key_order_independent(self):
+        """JSON hash is deterministic regardless of key order."""
+        r1 = parse('{"a": 1, "b": 2}', ContentType.JSON)
+        r2 = parse('{"b": 2, "a": 1}', ContentType.JSON)
+        assert r1.content_hash == r2.content_hash
+
+    def test_hash_on_yaml(self):
+        result = parse("key: value", ContentType.YAML)
+        assert result.content_hash != ""
+
+    def test_hash_on_xml(self):
+        result = parse("<root><a>1</a></root>", ContentType.XML)
+        assert result.content_hash != ""
+
+    def test_hash_on_markdown(self):
+        result = parse("# Title\nContent", ContentType.MARKDOWN)
+        assert result.content_hash != ""
+
+    def test_verify_passes_on_unmodified(self):
+        result = parse("hello", ContentType.TEXT)
+        assert result.verify() is True
+
+    def test_verify_on_json(self):
+        result = parse('{"key": "value"}', ContentType.JSON)
+        assert result.verify() is True
+
+    def test_compose_has_hash(self):
+        r1 = parse("a", ContentType.TEXT)
+        r2 = parse("b", ContentType.TEXT)
+        combined = compose(r1, r2)
+        assert combined.content_hash != ""
+        assert combined.verify() is True
+
+    def test_compose_hash_differs_from_parts(self):
+        r1 = parse("a", ContentType.TEXT)
+        r2 = parse("b", ContentType.TEXT)
+        combined = compose(r1, r2)
+        assert combined.content_hash != r1.content_hash
+        assert combined.content_hash != r2.content_hash
+
+    def test_verify_backwards_compat_no_hash(self):
+        """ParseResult without hash (backwards compat) returns True for verify."""
+        result = ParseResult(
+            content="hello",
+            content_type=ContentType.TEXT,
+            sanitized=True,
+        )
+        assert result.content_hash == ""
+        assert result.verify() is True
+
+
 class TestBackwardsCompatibility:
     """Ensure v0.1 behavior is preserved."""
 
