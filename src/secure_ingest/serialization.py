@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from .parser import (
+    AllowRule,
     ContentType,
     DenyRule,
     InjectionPattern,
@@ -64,6 +65,11 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
     if policy.deny_rules:
         d["deny_rules"] = [
             _deny_rule_to_dict(rule) for rule in policy.deny_rules
+        ]
+
+    if policy.allow_rules:
+        d["allow_rules"] = [
+            _allow_rule_to_dict(rule) for rule in policy.allow_rules
         ]
 
     if policy.patterns is not None:
@@ -121,6 +127,14 @@ def policy_from_dict(d: dict[str, Any]) -> Policy:
             raise ValueError(f"deny_rules must be a list, got {type(rules_raw).__name__}")
         deny_rules = tuple(_deny_rule_from_dict(r) for r in rules_raw)
 
+    # allow_rules
+    allow_rules: tuple[AllowRule, ...] = ()
+    if "allow_rules" in d:
+        rules_raw = d["allow_rules"]
+        if not isinstance(rules_raw, list):
+            raise ValueError(f"allow_rules must be a list, got {type(rules_raw).__name__}")
+        allow_rules = tuple(_allow_rule_from_dict(r) for r in rules_raw)
+
     # patterns
     patterns = None
     if "patterns" in d:
@@ -134,6 +148,7 @@ def policy_from_dict(d: dict[str, Any]) -> Policy:
         patterns=patterns,
         strip_injections=strip_injections,
         deny_rules=deny_rules,
+        allow_rules=allow_rules,
     )
 
 
@@ -224,6 +239,23 @@ def _deny_rule_from_dict(d: dict[str, Any]) -> DenyRule:
     if "name" not in d or "pattern" not in d:
         raise ValueError(f"deny_rule requires 'name' and 'pattern', got keys: {list(d.keys())}")
     return DenyRule(
+        name=str(d["name"]),
+        pattern=str(d["pattern"]),
+        description=str(d.get("description", "")),
+    )
+
+
+def _allow_rule_to_dict(rule: AllowRule) -> dict[str, str]:
+    d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern}
+    if rule.description:
+        d["description"] = rule.description
+    return d
+
+
+def _allow_rule_from_dict(d: dict[str, Any]) -> AllowRule:
+    if "name" not in d or "pattern" not in d:
+        raise ValueError(f"allow_rule requires 'name' and 'pattern', got keys: {list(d.keys())}")
+    return AllowRule(
         name=str(d["name"]),
         pattern=str(d["pattern"]),
         description=str(d.get("description", "")),

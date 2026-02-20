@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from secure_ingest import (
+    AllowRule,
     ContentType,
     DenyRule,
     InjectionPattern,
@@ -375,3 +376,78 @@ class TestEdgeCases:
         reg.add(InjectionPattern("p", r"x"))
         d = policy_to_dict(Policy(patterns=reg))
         assert "description" not in d["patterns"]["custom"][0]
+
+
+class TestAllowRuleSerialization:
+    """Allow rules round-trip through dict, JSON, YAML."""
+
+    def test_to_dict_with_allow_rules(self):
+        policy = Policy(allow_rules=(
+            AllowRule("has_id", r'"id"\s*:', "Requires an id field"),
+        ))
+        d = policy_to_dict(policy)
+        assert "allow_rules" in d
+        assert len(d["allow_rules"]) == 1
+        assert d["allow_rules"][0]["name"] == "has_id"
+        assert d["allow_rules"][0]["description"] == "Requires an id field"
+
+    def test_from_dict_with_allow_rules(self):
+        d = {
+            "allow_rules": [
+                {"name": "has_ts", "pattern": r'"timestamp":', "description": "Must have timestamp"},
+            ]
+        }
+        policy = policy_from_dict(d)
+        assert len(policy.allow_rules) == 1
+        assert policy.allow_rules[0].name == "has_ts"
+
+    def test_dict_round_trip(self):
+        original = Policy(
+            allow_rules=(
+                AllowRule("r1", r"AAA", "first"),
+                AllowRule("r2", r"BBB"),
+            ),
+            deny_rules=(DenyRule("d1", r"CCC"),),
+        )
+        d = policy_to_dict(original)
+        restored = policy_from_dict(d)
+        assert len(restored.allow_rules) == 2
+        assert len(restored.deny_rules) == 1
+        assert restored.allow_rules[0].name == "r1"
+        assert restored.allow_rules[1].name == "r2"
+
+    def test_json_round_trip(self, tmp_path):
+        original = Policy(allow_rules=(AllowRule("req", r"REQUIRED"),))
+        path = tmp_path / "policy.json"
+        policy_to_json(original, path)
+        restored = policy_from_json(str(path))
+        assert len(restored.allow_rules) == 1
+        assert restored.allow_rules[0].pattern == r"REQUIRED"
+
+    def test_yaml_round_trip(self, tmp_path):
+        original = Policy(allow_rules=(
+            AllowRule("has_data", r'"data":', "Must contain data"),
+        ))
+        path = tmp_path / "policy.yaml"
+        policy_to_yaml(original, path)
+        restored = policy_from_yaml(str(path))
+        assert len(restored.allow_rules) == 1
+        assert restored.allow_rules[0].name == "has_data"
+
+    def test_empty_allow_rules_not_in_dict(self):
+        """Empty allow_rules tuple omitted from dict output."""
+        policy = Policy(allow_rules=())
+        d = policy_to_dict(policy)
+        assert "allow_rules" not in d
+
+    def test_allow_rule_description_optional(self):
+        d = policy_to_dict(Policy(allow_rules=(AllowRule("r", r"x"),)))
+        assert "description" not in d["allow_rules"][0]
+
+    def test_from_dict_invalid_allow_rules_type(self):
+        with pytest.raises(ValueError, match="allow_rules must be a list"):
+            policy_from_dict({"allow_rules": "not a list"})
+
+    def test_from_dict_missing_allow_rule_fields(self):
+        with pytest.raises(ValueError, match="allow_rule requires"):
+            policy_from_dict({"allow_rules": [{"name": "missing_pattern"}]})

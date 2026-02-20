@@ -202,6 +202,29 @@ class DenyRule:
 
 
 @dataclass(frozen=True)
+class AllowRule:
+    """A declarative content-level allow rule (positive matching).
+
+    The mirror of DenyRule: content MUST match this pattern to be accepted.
+    If any AllowRule does NOT match, the content is rejected. This enforces
+    structural requirements — e.g., "content must contain a timestamp" or
+    "content must include a valid identifier."
+
+    Args:
+        name: Unique rule identifier (e.g., "requires_timestamp", "has_id").
+        pattern: Regex pattern string. Content MUST match this to pass.
+        description: Human-readable explanation of what this rule requires.
+    """
+    name: str
+    pattern: str
+    description: str = ""
+
+    @property
+    def compiled(self) -> re.Pattern[str]:
+        return re.compile(self.pattern)
+
+
+@dataclass(frozen=True)
 class Policy:
     """Structural policy enforcement for content ingestion.
 
@@ -220,6 +243,7 @@ class Policy:
     - ``require_schema``: True if ANY policy requires it
     - ``strip_injections``: True if ANY policy enables it
     - ``deny_rules``: union (all rules from all policies, deduplicated by name)
+    - ``allow_rules``: union (all rules from all policies, deduplicated by name)
     - ``patterns``: merged (all patterns from all policies)
 
     Args:
@@ -235,6 +259,9 @@ class Policy:
         deny_rules: Tuple of DenyRule instances. If any rule matches raw content,
             the entire parse is rejected with a ParseError listing the violated rules.
             Checked against raw content BEFORE parsing — structural enforcement.
+        allow_rules: Tuple of AllowRule instances. Content MUST match ALL rules.
+            If any rule does NOT match, the parse is rejected. Checked after deny
+            rules but before parsing — structural enforcement.
 
     Example:
         >>> policy = Policy(allowed_types={ContentType.JSON, ContentType.YAML},
@@ -244,6 +271,10 @@ class Policy:
         >>> no_secrets = DenyRule("no_api_keys", r"(?i)api[_-]?key\\s*[:=]\\s*\\S+")
         >>> policy = Policy(deny_rules=(no_secrets,))
         >>> parse("api_key=sk-abc123", "text", policy=policy)  # raises ParseError
+
+        >>> has_id = AllowRule("requires_id", r'"id"\\s*:', "Must contain an id field")
+        >>> policy = Policy(allow_rules=(has_id,))
+        >>> parse('{"name": "test"}', "json", policy=policy)  # raises ParseError
 
         >>> # Layered composition: org + agent policies
         >>> org = Policy(allowed_types=frozenset({ContentType.JSON, ContentType.TEXT}),
@@ -259,6 +290,7 @@ class Policy:
     patterns: PatternRegistry | None = None
     strip_injections: bool = True
     deny_rules: tuple[DenyRule, ...] = ()
+    allow_rules: tuple[AllowRule, ...] = ()
 
     @staticmethod
     def compose(*policies: "Policy") -> "Policy":
@@ -319,6 +351,14 @@ class Policy:
                 seen_rules[rule.name] = rule
         deny_rules = tuple(seen_rules.values())
 
+        # allow_rules: union, deduplicated by name (last wins on name collision)
+        # More allow rules = more requirements = more restrictive
+        seen_allow: dict[str, AllowRule] = {}
+        for p in policies:
+            for rule in p.allow_rules:
+                seen_allow[rule.name] = rule
+        allow_rules = tuple(seen_allow.values())
+
         # patterns: merge all registries into one
         registries = [p.patterns for p in policies if p.patterns is not None]
         if not registries:
@@ -337,6 +377,7 @@ class Policy:
             patterns=merged_patterns,
             strip_injections=strip_injections,
             deny_rules=deny_rules,
+            allow_rules=allow_rules,
         )
 
 
@@ -683,6 +724,18 @@ def parse(
                     f"Content denied by policy rules: {names}",
                     content_type=content_type.value,
                     violations=[f"policy_deny:{name}" for name in violated],
+                )
+
+        # Allow rules — content must match ALL rules (after deny rules)
+        if policy.allow_rules:
+            raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+            missing = [rule.name for rule in policy.allow_rules if not rule.compiled.search(raw_str)]
+            if missing:
+                names = ", ".join(missing)
+                raise ParseError(
+                    f"Content missing required patterns: {names}",
+                    content_type=content_type.value,
+                    violations=[f"policy_allow:{name}" for name in missing],
                 )
 
         # Policy overrides for patterns and strip_injections

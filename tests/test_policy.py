@@ -3,7 +3,7 @@
 import pytest
 from secure_ingest import (
     parse, ParseError, ParseResult, ContentType, TaintLevel,
-    Policy, DenyRule, PatternRegistry, InjectionPattern, Schema, Field,
+    Policy, DenyRule, AllowRule, PatternRegistry, InjectionPattern, Schema, Field,
 )
 
 
@@ -445,3 +445,154 @@ class TestPolicyCompose:
         # Deny rule enforced
         with pytest.raises(ParseError, match="no_eval"):
             parse('eval(bad)', "text", policy=combined)
+
+
+class TestAllowRules:
+    """Policy.allow_rules — content must match ALL rules to be accepted."""
+
+    def test_single_allow_rule_passes(self):
+        rule = AllowRule("has_id", r'"id"\s*:')
+        policy = Policy(allow_rules=(rule,))
+        result = parse('{"id": 123, "name": "test"}', "json", policy=policy)
+        assert result.content["id"] == 123
+
+    def test_single_allow_rule_blocks(self):
+        rule = AllowRule("has_id", r'"id"\s*:')
+        policy = Policy(allow_rules=(rule,))
+        with pytest.raises(ParseError) as exc_info:
+            parse('{"name": "test"}', "json", policy=policy)
+        assert "policy_allow:has_id" in exc_info.value.violations
+
+    def test_multiple_allow_rules_all_pass(self):
+        rules = (
+            AllowRule("has_id", r'"id"\s*:'),
+            AllowRule("has_timestamp", r'"timestamp"\s*:'),
+        )
+        policy = Policy(allow_rules=rules)
+        result = parse('{"id": 1, "timestamp": "2026-01-01"}', "json", policy=policy)
+        assert result.content["id"] == 1
+
+    def test_multiple_allow_rules_partial_fail(self):
+        """If one rule doesn't match, content is rejected."""
+        rules = (
+            AllowRule("has_id", r'"id"\s*:'),
+            AllowRule("has_timestamp", r'"timestamp"\s*:'),
+        )
+        policy = Policy(allow_rules=rules)
+        with pytest.raises(ParseError) as exc_info:
+            parse('{"id": 1, "name": "test"}', "json", policy=policy)
+        violations = exc_info.value.violations
+        assert "policy_allow:has_timestamp" in violations
+        assert "policy_allow:has_id" not in violations  # id was present
+
+    def test_allow_rule_on_text(self):
+        rule = AllowRule("has_header", r"^#\s+")
+        policy = Policy(allow_rules=(rule,))
+        result = parse("# My Document\nContent here", "text", policy=policy)
+        assert "# My Document" in result.content
+
+    def test_allow_rule_on_text_blocks(self):
+        rule = AllowRule("has_header", r"^#\s+")
+        policy = Policy(allow_rules=(rule,))
+        with pytest.raises(ParseError, match="missing required"):
+            parse("No header here", "text", policy=policy)
+
+    def test_allow_rule_on_bytes(self):
+        rule = AllowRule("has_marker", r"MARKER")
+        policy = Policy(allow_rules=(rule,))
+        result = parse(b"content with MARKER in it", "text", policy=policy)
+        assert "MARKER" in result.content
+
+    def test_allow_rule_checked_before_parsing(self):
+        """Allow rules run on raw content before the parser processes it."""
+        rule = AllowRule("requires_valid_prefix", r"^PREFIX:")
+        policy = Policy(allow_rules=(rule,))
+        # Invalid JSON, but allow rule should reject FIRST
+        with pytest.raises(ParseError) as exc_info:
+            parse("{bad json", "json", policy=policy)
+        assert "policy_allow:requires_valid_prefix" in exc_info.value.violations
+
+    def test_deny_and_allow_combined(self):
+        """Deny rules are checked before allow rules."""
+        deny = DenyRule("no_secrets", r"(?i)secret")
+        allow = AllowRule("has_id", r'"id"\s*:')
+        policy = Policy(deny_rules=(deny,), allow_rules=(allow,))
+        # Content has both a secret AND an id — deny should win (checked first)
+        with pytest.raises(ParseError) as exc_info:
+            parse('{"id": 1, "secret": "x"}', "json", policy=policy)
+        assert any("policy_deny" in v for v in exc_info.value.violations)
+
+    def test_allow_rules_combined_with_type_restriction(self):
+        rule = AllowRule("has_data", r'"data"\s*:')
+        policy = Policy(
+            allowed_types=frozenset({ContentType.JSON}),
+            allow_rules=(rule,),
+        )
+        result = parse('{"data": [1,2,3]}', "json", policy=policy)
+        assert result.content["data"] == [1, 2, 3]
+
+    def test_empty_allow_rules_tuple(self):
+        """Empty allow_rules is the default — no requirements enforced."""
+        policy = Policy(allow_rules=())
+        result = parse("anything goes", "text", policy=policy)
+        assert result.content == "anything goes"
+
+    def test_allow_rule_error_message(self):
+        rules = (
+            AllowRule("needs_a", r"AAA"),
+            AllowRule("needs_b", r"BBB"),
+        )
+        policy = Policy(allow_rules=rules)
+        with pytest.raises(ParseError) as exc_info:
+            parse("only has AAA", "text", policy=policy)
+        assert "needs_b" in str(exc_info.value)
+        assert "policy_allow:needs_b" in exc_info.value.violations
+        assert "policy_allow:needs_a" not in exc_info.value.violations
+
+
+class TestComposeAllowRules:
+    """Policy.compose() with allow_rules — union semantics."""
+
+    def test_compose_allow_rules_union(self):
+        p1 = Policy(allow_rules=(AllowRule("has_a", r"AAA"),))
+        p2 = Policy(allow_rules=(AllowRule("has_b", r"BBB"),))
+        combined = Policy.compose(p1, p2)
+        names = {r.name for r in combined.allow_rules}
+        assert names == {"has_a", "has_b"}
+
+    def test_compose_allow_rules_dedup_by_name(self):
+        r1 = AllowRule("needs_id", r'"id":')
+        r2 = AllowRule("needs_id", r'"id"\s*:')  # different pattern, same name
+        p1 = Policy(allow_rules=(r1,))
+        p2 = Policy(allow_rules=(r2,))
+        combined = Policy.compose(p1, p2)
+        assert len(combined.allow_rules) == 1
+        assert combined.allow_rules[0].pattern == r'"id"\s*:'  # last wins
+
+    def test_compose_deny_and_allow_rules(self):
+        """Compose merges both deny and allow rules."""
+        p1 = Policy(
+            deny_rules=(DenyRule("no_eval", r"eval\("),),
+            allow_rules=(AllowRule("has_id", r'"id":'),),
+        )
+        p2 = Policy(
+            deny_rules=(DenyRule("no_exec", r"exec\("),),
+            allow_rules=(AllowRule("has_ts", r'"timestamp":'),),
+        )
+        combined = Policy.compose(p1, p2)
+        assert len(combined.deny_rules) == 2
+        assert len(combined.allow_rules) == 2
+
+    def test_compose_end_to_end_with_allow(self):
+        """Composed policy with allow rules enforces in parse()."""
+        p1 = Policy(allow_rules=(AllowRule("has_id", r'"id"\s*:'),))
+        p2 = Policy(allowed_types=frozenset({ContentType.JSON}))
+        combined = Policy.compose(p1, p2)
+
+        # Valid: JSON with id
+        result = parse('{"id": 1}', "json", policy=combined)
+        assert result.content["id"] == 1
+
+        # Blocked: JSON without id
+        with pytest.raises(ParseError, match="has_id"):
+            parse('{"name": "test"}', "json", policy=combined)
