@@ -15,8 +15,11 @@ from .budget import (
     BudgetExhaustedError, CycleDetectedError,
 )
 from .pipeline import IngestionPipeline, IngestResult
+from .structure import (
+    ToolGraph, StructureMonitor, StructureViolationError,
+)
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 __all__ = [
     "parse", "compose", "ParseResult", "ParseError", "ContentType", "TaintLevel",
     "Policy", "DenyRule", "AllowRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
@@ -27,4 +30,5 @@ __all__ = [
     "BudgetConfig", "RequestBudget",
     "BudgetExhaustedError", "CycleDetectedError",
     "IngestionPipeline", "IngestResult",
+    "ToolGraph", "StructureMonitor", "StructureViolationError",
 ]
