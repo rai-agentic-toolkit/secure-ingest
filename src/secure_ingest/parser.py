@@ -15,7 +15,9 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, List
+
+from .semantic import BaseSemanticScanner
 
 
 class ContentType(Enum):
@@ -631,6 +633,7 @@ def parse(
     strip_injections: bool = True,
     patterns: PatternRegistry | None = None,
     schema: Any | None = None,
+    semantic_scanner: BaseSemanticScanner | None = None,
     provenance: str = "",
     chain_id: str = "",
     policy: Policy | None = None,
@@ -648,6 +651,9 @@ def parse(
         schema: A Schema instance to validate structured content against.
             Only applies to JSON, YAML, and XML content types.
             SchemaError is raised if validation fails.
+        semantic_scanner: Optional instance of BaseSemanticScanner to evaluate
+            the intent of the parsed text. If violations are found, they are
+            appended to warnings and the taint level is reduced in some workflows.
         provenance: Source identifier for taint tracking (e.g., "agent-A",
             "api-gateway"). Propagated in the result for downstream consumers.
         chain_id: Correlation ID for tracking content through multi-hop flows.
@@ -774,6 +780,22 @@ def parse(
     # Determine taint level
     taint = TaintLevel.SANITIZED
 
+    if semantic_scanner is not None:
+        if isinstance(result.content, str):
+            semantic_violations = semantic_scanner.scan(result.content)
+            if semantic_violations:
+                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
+                result.stripped.extend(semantic_violations)  # Reusing stripped to list things that caused issues
+        elif isinstance(result.content, dict) or isinstance(result.content, list):
+            # For structured data, we would ideally extract all strings and scan them.
+            # A simplified approach for now is scanning stringified representation.
+            import json
+            text_repr = json.dumps(result.content, default=str)
+            semantic_violations = semantic_scanner.scan(text_repr)
+            if semantic_violations:
+                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
+                result.stripped.extend(semantic_violations)
+        
     # Schema validation (only for structured types that produce dicts)
     if schema is not None and isinstance(result.content, dict):
         schema.validate(result.content)

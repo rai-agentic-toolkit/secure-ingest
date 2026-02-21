@@ -1,8 +1,9 @@
 # secure-ingest
 
-Stateless sandboxed content parser for AI agent ingestion.
-Prevents prompt injection at the architectural level — with taint tracking,
-policy enforcement, and composition safety for multi-agent flows.
+Payload hygiene and content validation layer for AI agent ingestion.
+Prevents structural manipulation, protocol-level garbage, and basic prompt injection attacks
+at the architectural level — with taint tracking, policy enforcement, and composition safety
+for multi-agent flows.
 
 **Zero required dependencies. Pure Python 3.10+. 363 tests.**
 

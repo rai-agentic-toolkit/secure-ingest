@@ -1,4 +1,4 @@
-"""secure-ingest: Stateless sandboxed content parser for AI agent ingestion."""
+"""secure-ingest: Payload hygiene and content validation layer for AI agent ingestion."""
 
 from .parser import (
     parse, compose, ParseResult, ParseError, ContentType, TaintLevel,
@@ -19,6 +19,7 @@ from .structure import (
     ToolGraph, StructureMonitor, StructureViolationError,
 )
 from .reliability import ReliabilityProfiler, ReliabilityReport, DimensionScore
+from .llm import SecureLLMWrapper, SecurityException
 
 __version__ = "1.0.0"
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "IngestionPipeline", "IngestResult",
     "ToolGraph", "StructureMonitor", "StructureViolationError",
     "ReliabilityProfiler", "ReliabilityReport", "DimensionScore",
+    "SecureLLMWrapper", "SecurityException"
 ]
