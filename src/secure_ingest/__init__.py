@@ -19,7 +19,7 @@ from .structure import (
     ToolGraph, StructureMonitor, StructureViolationError,
 )
 from .reliability import ReliabilityProfiler, ReliabilityReport, DimensionScore
-from .llm import SecureLLMWrapper, SecurityException, ValidatedPayload
+from .llm import ValidatedPayload
 
 __version__ = "1.0.0"
 __all__ = [
@@ -33,5 +33,5 @@ __all__ = [
     "IngestionPipeline", "IngestResult",
     "ToolGraph", "StructureMonitor", "StructureViolationError",
     "ReliabilityProfiler", "ReliabilityReport", "DimensionScore",
-    "SecureLLMWrapper", "SecurityException", "ValidatedPayload"
+    "ValidatedPayload"
 ]

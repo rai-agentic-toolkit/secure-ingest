@@ -72,16 +72,38 @@ Every `ParseResult` carries a taint level — the trust state of the content:
 
 ### Type-level Enforcements
 
-Use type enforcements to ensure that LLM wrappers don't accidentally receive raw strings or unverified dicts, by taking advantage of `ValidatedPayload`.
+Use type enforcements to explicitly require validated payloads in your application functions. This prevents LLM SDKs from accidentally receiving raw, unvalidated strings or untyped structures.
 
 ```python
-from secure_ingest import ValidatedPayload, ContentType
+from secure_ingest import parse, ValidatedPayload, ContentType
+from pydantic import BaseModel
+import openai
 
-payload = ValidatedPayload(
-    content={'name': 'Alice'},
-    content_type=ContentType.JSON,
-    chain_id="abc-123"
+class UserPrompt(BaseModel):
+    user_id: int
+    query: str
+
+def call_llm(payload: ValidatedPayload):
+    # The type signature enforces that only validated payloads are accepted
+    # Extract the safe content to pass to the external SDK
+    return openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": str(payload.content)}]
+    )
+
+raw_input = '{"user_id": 123, "query": "hello"}'
+# 1. Parse and validate
+result = parse(raw_input, ContentType.JSON, schema=UserPrompt)
+
+# 2. Convert to ValidatedPayload
+safe_payload = ValidatedPayload(
+    content=result.content,
+    content_type=result.content_type,
+    chain_id=result.chain_id
 )
+
+# 3. Call execution layer safely
+call_llm(safe_payload)
 ```
 
 ### Provenance & Integrity
