@@ -5,7 +5,7 @@ Prevents structural manipulation, protocol-level garbage, and basic anomalies
 at the architectural level — with taint tracking, policy enforcement, and structure safety
 for multi-agent flows.
 
-**Zero required dependencies for core execution. Pure Python 3.10+. 400+ tests.**
+**Built on Pydantic and defusedxml. Pure Python 3.10+. 400+ tests.**
 
 ## Install
 
