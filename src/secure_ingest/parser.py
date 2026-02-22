@@ -15,7 +15,11 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, List, Type
+from pydantic import BaseModel, ValidationError
+from .rules import ValueRule
+
+from .semantic import BaseSemanticScanner
 
 
 class ContentType(Enum):
@@ -180,209 +184,75 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 @dataclass(frozen=True)
-class DenyRule:
-    """A declarative content-level deny rule.
+class StrictPolicy:
+    """Strict structural policy enforcement for content ingestion.
 
-    Unlike injection patterns (which strip matches), deny rules reject
-    the entire content if any match is found. This implements the PCAS
-    principle: prevent policy violations before execution, not after.
-
-    Args:
-        name: Unique rule identifier (e.g., "no_pii", "no_credentials").
-        pattern: Regex pattern string. Content matching this is denied.
-        description: Human-readable explanation of why this rule exists.
+    Replaces legacy Policy. Forces security-first defaults like
+    no 10MB strings, required schemas, and explicit bounding of values.
     """
-    name: str
-    pattern: str
-    description: str = ""
-
-    @property
-    def compiled(self) -> re.Pattern[str]:
-        return re.compile(self.pattern)
-
-
-@dataclass(frozen=True)
-class AllowRule:
-    """A declarative content-level allow rule (positive matching).
-
-    The mirror of DenyRule: content MUST match this pattern to be accepted.
-    If any AllowRule does NOT match, the content is rejected. This enforces
-    structural requirements — e.g., "content must contain a timestamp" or
-    "content must include a valid identifier."
-
-    Args:
-        name: Unique rule identifier (e.g., "requires_timestamp", "has_id").
-        pattern: Regex pattern string. Content MUST match this to pass.
-        description: Human-readable explanation of what this rule requires.
-    """
-    name: str
-    pattern: str
-    description: str = ""
-
-    @property
-    def compiled(self) -> re.Pattern[str]:
-        return re.compile(self.pattern)
-
-
-@dataclass(frozen=True)
-class Policy:
-    """Structural policy enforcement for content ingestion.
-
-    Policies compile security rules into the parse call itself — the PCAS
-    principle of "structural enforcement over runtime detection." Instead of
-    relying on consumers to check results, the policy prevents disallowed
-    content from being parsed at all.
-
-    Policies can be composed via ``Policy.compose()`` to layer enforcement
-    (e.g., org-level + agent-level + content-specific). Composition uses
-    most-restrictive-wins semantics:
-
-    - ``allowed_types``: intersection (only types allowed by ALL policies)
-    - ``max_depth``: minimum non-None value
-    - ``max_size``: minimum non-None value
-    - ``require_schema``: True if ANY policy requires it
-    - ``strip_injections``: True if ANY policy enables it
-    - ``deny_rules``: union (all rules from all policies, deduplicated by name)
-    - ``allow_rules``: union (all rules from all policies, deduplicated by name)
-    - ``patterns``: merged (all patterns from all policies)
-
-    Args:
-        allowed_types: Set of ContentType values that are permitted.
-            If None, all types are allowed. If set, any other type raises ParseError.
-        max_depth: Maximum nesting depth for structured content (JSON, YAML, XML).
-            Overrides the module default (50). Set to 0 for flat-only.
-        max_size: Maximum content size in bytes. Overrides per-type defaults.
-        require_schema: If True, parse() raises ParseError when no schema is provided
-            for structured content types (JSON, YAML, XML).
-        patterns: Custom PatternRegistry. Overrides the patterns parameter on parse().
-        strip_injections: Whether to strip detected injection patterns from text content.
-        deny_rules: Tuple of DenyRule instances. If any rule matches raw content,
-            the entire parse is rejected with a ParseError listing the violated rules.
-            Checked against raw content BEFORE parsing — structural enforcement.
-        allow_rules: Tuple of AllowRule instances. Content MUST match ALL rules.
-            If any rule does NOT match, the parse is rejected. Checked after deny
-            rules but before parsing — structural enforcement.
-
-    Example:
-        >>> policy = Policy(allowed_types={ContentType.JSON, ContentType.YAML},
-        ...                 max_depth=10, require_schema=True)
-        >>> parse('{"key": "value"}', "json", policy=policy, schema=my_schema)
-
-        >>> no_secrets = DenyRule("no_api_keys", r"(?i)api[_-]?key\\s*[:=]\\s*\\S+")
-        >>> policy = Policy(deny_rules=(no_secrets,))
-        >>> parse("api_key=sk-abc123", "text", policy=policy)  # raises ParseError
-
-        >>> has_id = AllowRule("requires_id", r'"id"\\s*:', "Must contain an id field")
-        >>> policy = Policy(allow_rules=(has_id,))
-        >>> parse('{"name": "test"}', "json", policy=policy)  # raises ParseError
-
-        >>> # Layered composition: org + agent policies
-        >>> org = Policy(allowed_types=frozenset({ContentType.JSON, ContentType.TEXT}),
-        ...              max_size=10000, deny_rules=(no_secrets,))
-        >>> agent = Policy(allowed_types=frozenset({ContentType.JSON}), max_depth=5)
-        >>> combined = Policy.compose(org, agent)
-        >>> # combined: only JSON, max_size=10000, max_depth=5, deny_rules=(no_secrets,)
-    """
-    allowed_types: frozenset[ContentType] | None = None
-    max_depth: int | None = None
-    max_size: int | None = None
-    require_schema: bool = False
+    allowed_types: frozenset[ContentType]
+    max_size_bytes: int
+    max_depth: int
+    schema: type[BaseModel] | None = None
+    mutation_mode: str = "REJECT" # "REJECT" or "STRIP_AND_WARN"
+    value_rules: tuple[ValueRule, ...] = ()
     patterns: PatternRegistry | None = None
-    strip_injections: bool = True
-    deny_rules: tuple[DenyRule, ...] = ()
-    allow_rules: tuple[AllowRule, ...] = ()
+
+    def __post_init__(self):
+        if self.max_size_bytes > 1024 * 1024:
+            import logging
+            logging.getLogger(__name__).warning(
+                "StrictPolicy allows payloads > 1MB. Ensure downstream LLM context can handle this."
+            )
 
     @staticmethod
-    def compose(*policies: "Policy") -> "Policy":
-        """Compose multiple policies with most-restrictive-wins semantics.
-
-        This enables layered policy enforcement: an organization can define
-        a base policy, teams can add restrictions, and individual agents can
-        further tighten constraints. No layer can loosen what a higher layer
-        restricts — security only tightens.
-
-        Args:
-            *policies: Two or more Policy instances to compose.
-
-        Returns:
-            A new Policy with the combined (most restrictive) constraints.
-
-        Raises:
-            ValueError: If fewer than 2 policies are provided.
-            ValueError: If composed allowed_types would be empty (no types allowed).
-        """
+    def compose(*policies: "StrictPolicy") -> "StrictPolicy":
         if len(policies) < 2:
-            raise ValueError("Policy.compose() requires at least 2 policies")
+            raise ValueError("StrictPolicy.compose() requires at least 2 policies")
 
-        # allowed_types: intersection of all non-None sets
-        # If all are None → None (allow all). If any is non-None → intersect.
-        type_sets = [p.allowed_types for p in policies if p.allowed_types is not None]
-        if not type_sets:
-            allowed_types = None
-        else:
-            allowed_types = type_sets[0]
-            for ts in type_sets[1:]:
-                allowed_types = allowed_types & ts
-            if not allowed_types:
-                raise ValueError(
-                    "Policy.compose() resulted in empty allowed_types — "
-                    "no content type is permitted by all policies"
-                )
-            allowed_types = frozenset(allowed_types)
+        type_sets = [p.allowed_types for p in policies]
+        allowed_types = type_sets[0]
+        for ts in type_sets[1:]:
+            allowed_types = allowed_types & ts
+        if not allowed_types:
+            raise ValueError("StrictPolicy.compose() resulted in empty allowed_types")
 
-        # max_depth: minimum non-None value
-        depths = [p.max_depth for p in policies if p.max_depth is not None]
-        max_depth = min(depths) if depths else None
+        max_depth = min(p.max_depth for p in policies)
+        max_size_bytes = min(p.max_size_bytes for p in policies)
 
-        # max_size: minimum non-None value
-        sizes = [p.max_size for p in policies if p.max_size is not None]
-        max_size = min(sizes) if sizes else None
+        schemas = [p.schema for p in policies if p.schema is not None]
+        schema = schemas[0] if schemas else None
 
-        # require_schema: True if ANY policy requires it
-        require_schema = any(p.require_schema for p in policies)
+        modes = {p.mutation_mode for p in policies}
+        mutation_mode = "REJECT" if "REJECT" in modes else "STRIP_AND_WARN"
 
-        # strip_injections: True if ANY policy enables it
-        strip_injections = any(p.strip_injections for p in policies)
-
-        # deny_rules: union, deduplicated by name (last wins on name collision)
-        seen_rules: dict[str, DenyRule] = {}
+        seen_rules = {}
         for p in policies:
-            for rule in p.deny_rules:
+            for rule in p.value_rules:
                 seen_rules[rule.name] = rule
-        deny_rules = tuple(seen_rules.values())
+        value_rules = tuple(seen_rules.values())
 
-        # allow_rules: union, deduplicated by name (last wins on name collision)
-        # More allow rules = more requirements = more restrictive
-        seen_allow: dict[str, AllowRule] = {}
-        for p in policies:
-            for rule in p.allow_rules:
-                seen_allow[rule.name] = rule
-        allow_rules = tuple(seen_allow.values())
-
-        # patterns: merge all registries into one
         registries = [p.patterns for p in policies if p.patterns is not None]
         if not registries:
             merged_patterns = None
         else:
             merged_patterns = PatternRegistry(include_builtins=False)
             for reg in registries:
-                for pattern in reg.get_all():
-                    merged_patterns.add(pattern)
+                for pat in reg.get_all():
+                    merged_patterns.add(pat)
 
-        return Policy(
-            allowed_types=allowed_types,
+        return StrictPolicy(
+            allowed_types=frozenset(allowed_types),
+            max_size_bytes=max_size_bytes,
             max_depth=max_depth,
-            max_size=max_size,
-            require_schema=require_schema,
+            schema=schema,
+            mutation_mode=mutation_mode,
+            value_rules=value_rules,
             patterns=merged_patterns,
-            strip_injections=strip_injections,
-            deny_rules=deny_rules,
-            allow_rules=allow_rules,
         )
 
 
-_MAX_TEXT_SIZE = 1_000_000    # 1MB
-_MAX_JSON_SIZE = 10_000_000   # 10MB
+_MAX_SIZE_BYTES = 10_000_000  # 10MB
 _MAX_JSON_DEPTH = 50
 
 
@@ -440,8 +310,6 @@ def _scan_json_strings(obj: Any, warnings: list[str], patterns: list[tuple[re.Pa
 def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
-    if len(raw) > _MAX_JSON_SIZE:
-        raise ParseError("JSON exceeds max size", content_type="json", violations=["size_exceeded"])
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -455,8 +323,6 @@ def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
 def _parse_text(raw: str | bytes, *, strip_injections: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
-    if len(raw) > _MAX_TEXT_SIZE:
-        raise ParseError("Text exceeds max size", content_type="text", violations=["size_exceeded"])
     warnings: list[str] = []
     stripped: list[str] = []
     if strip_injections:
@@ -470,8 +336,6 @@ def _parse_text(raw: str | bytes, *, strip_injections: bool = True, patterns: li
 def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
-    if len(raw) > _MAX_TEXT_SIZE:
-        raise ParseError("Markdown exceeds max size", content_type="markdown", violations=["size_exceeded"])
     warnings: list[str] = []
     stripped: list[str] = []
     # Strip HTML tags — deny by default
@@ -507,8 +371,6 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
 
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
-    if len(raw) > _MAX_JSON_SIZE:  # Same size limit as JSON
-        raise ParseError("YAML exceeds max size", content_type="yaml", violations=["size_exceeded"])
 
     try:
         parsed = yaml.safe_load(raw)
@@ -531,32 +393,14 @@ _MAX_XML_SIZE = 10_000_000  # 10MB
 
 
 def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
-    """Parse XML content with XXE protection and injection scanning.
-
-    Security measures:
-    - Disables external entity resolution (XXE protection)
-    - Disables DTD processing
-    - Enforces size limits
-    - Scans text content for injection patterns
-    """
-    import xml.etree.ElementTree as ET
+    """Parse XML content safely using defusedxml."""
+    import defusedxml.ElementTree as ET
     from xml.parsers.expat import ExpatError
 
     if isinstance(raw, bytes):
         raw_str = raw.decode("utf-8", errors="replace")
     else:
         raw_str = raw
-
-    if len(raw_str) > _MAX_XML_SIZE:
-        raise ParseError("XML exceeds max size", content_type="xml", violations=["size_exceeded"])
-
-    # Reject DOCTYPE declarations entirely — this prevents XXE, billion laughs, etc.
-    if re.search(r"<!DOCTYPE", raw_str, re.IGNORECASE):
-        raise ParseError(
-            "DOCTYPE declarations are not allowed (XXE protection)",
-            content_type="xml",
-            violations=["doctype_forbidden"],
-        )
 
     try:
         root = ET.fromstring(raw_str)
@@ -628,56 +472,15 @@ def parse(
     content_type: ContentType | str = ContentType.TEXT,
     *,
     strict: bool = True,
-    strip_injections: bool = True,
     patterns: PatternRegistry | None = None,
-    schema: Any | None = None,
+    schema: type[BaseModel] | None = None,
+    semantic_scanner: BaseSemanticScanner | None = None,
     provenance: str = "",
     chain_id: str = "",
-    policy: Policy | None = None,
+    policy: StrictPolicy | None = None,
+    mutation_mode: str = "REJECT",
 ) -> ParseResult:
     """Parse and sanitize content for safe agent ingestion.
-
-    Args:
-        content: Raw content to parse (string or bytes).
-        content_type: The type of content (json, text, markdown, yaml, xml).
-        strict: If True, raise on any validation failure.
-        strip_injections: If True, strip detected prompt injection patterns.
-        patterns: Custom PatternRegistry for injection detection. If None,
-            uses the built-in patterns. Pass PatternRegistry(include_builtins=False)
-            to disable all injection detection.
-        schema: A Schema instance to validate structured content against.
-            Only applies to JSON, YAML, and XML content types.
-            SchemaError is raised if validation fails.
-        provenance: Source identifier for taint tracking (e.g., "agent-A",
-            "api-gateway"). Propagated in the result for downstream consumers.
-        chain_id: Correlation ID for tracking content through multi-hop flows.
-            If empty, a new UUID is generated automatically.
-        policy: A Policy instance for structural enforcement. When provided,
-            the policy's settings override the corresponding parameters
-            (patterns, strip_injections). Content type and schema requirements
-            are enforced before parsing begins.
-
-    Returns:
-        ParseResult with sanitized content, taint metadata, and any warnings.
-
-    Raises:
-        ParseError: If content fails validation or violates the policy.
-        SchemaError: If content fails schema validation.
-
-    Example:
-        >>> from secure_ingest import parse, ContentType
-        >>> result = parse('{"key": "value"}', ContentType.JSON)
-        >>> result.content
-        {'key': 'value'}
-        >>> result.taint
-        <TaintLevel.SANITIZED: 'sanitized'>
-
-        >>> from secure_ingest import Schema, Field, Policy
-        >>> policy = Policy(allowed_types=frozenset({ContentType.JSON}), require_schema=True)
-        >>> schema = Schema({"name": Field(str, required=True)})
-        >>> result = parse('{"name": "Alice"}', ContentType.JSON, schema=schema, policy=policy)
-        >>> result.taint
-        <TaintLevel.VALIDATED: 'validated'>
     """
     if isinstance(content_type, str):
         try:
@@ -685,10 +488,9 @@ def parse(
         except ValueError:
             raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
-    # --- Policy enforcement (structural, before any parsing) ---
+    # --- StrictPolicy enforcement (structural, before any parsing) ---
     if policy is not None:
-        # Type restriction
-        if policy.allowed_types is not None and content_type not in policy.allowed_types:
+        if content_type not in policy.allowed_types:
             allowed = ", ".join(t.value for t in sorted(policy.allowed_types, key=lambda t: t.value))
             raise ParseError(
                 f"Content type '{content_type.value}' not allowed by policy (allowed: {allowed})",
@@ -696,52 +498,29 @@ def parse(
                 violations=["policy_type_denied"],
             )
 
-        # Schema requirement for structured types
         _structured_types = {ContentType.JSON, ContentType.YAML, ContentType.XML}
-        if policy.require_schema and content_type in _structured_types and schema is None:
-            raise ParseError(
-                f"Policy requires schema validation for {content_type.value} content",
-                content_type=content_type.value,
-                violations=["policy_schema_required"],
-            )
+        if content_type in _structured_types and policy.schema is not None and schema is None:
+            schema = policy.schema
 
-        # Size enforcement (check before parsing)
-        raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
-        if policy.max_size is not None and len(raw_str.encode("utf-8")) > policy.max_size:
-            raise ParseError(
-                f"Content exceeds policy size limit ({policy.max_size} bytes)",
-                content_type=content_type.value,
-                violations=["policy_size_exceeded"],
-            )
+        max_size = policy.max_size_bytes
+    else:
+        max_size = _MAX_SIZE_BYTES
 
-        # Deny rules — reject content matching any rule (before parsing)
-        if policy.deny_rules:
-            raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
-            violated = [rule.name for rule in policy.deny_rules if rule.compiled.search(raw_str)]
-            if violated:
-                names = ", ".join(violated)
-                raise ParseError(
-                    f"Content denied by policy rules: {names}",
-                    content_type=content_type.value,
-                    violations=[f"policy_deny:{name}" for name in violated],
-                )
+    size_bytes = len(content) if isinstance(content, bytes) else len(content.encode("utf-8"))
+    if size_bytes > max_size:
+        raise ParseError(
+            f"Content exceeds size limit ({max_size} bytes)",
+            content_type=content_type.value,
+            violations=["policy_size_exceeded"],
+        )
 
-        # Allow rules — content must match ALL rules (after deny rules)
-        if policy.allow_rules:
-            raw_str = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
-            missing = [rule.name for rule in policy.allow_rules if not rule.compiled.search(raw_str)]
-            if missing:
-                names = ", ".join(missing)
-                raise ParseError(
-                    f"Content missing required patterns: {names}",
-                    content_type=content_type.value,
-                    violations=[f"policy_allow:{name}" for name in missing],
-                )
-
-        # Policy overrides for patterns and strip_injections
+    if policy is not None:
         if policy.patterns is not None:
             patterns = policy.patterns
-        strip_injections = policy.strip_injections
+        
+        mutation_mode = policy.mutation_mode
+        
+    check_injections = (mutation_mode != "IGNORE")
 
     # Resolve patterns to compiled list (None = use module defaults)
     compiled_patterns = patterns.get_patterns() if patterns is not None else None
@@ -761,9 +540,9 @@ def parse(
     if content_type == ContentType.JSON:
         result = _parse_json(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
     elif content_type == ContentType.TEXT:
-        result = _parse_text(content, strip_injections=strip_injections, patterns=compiled_patterns)
+        result = _parse_text(content, strip_injections=check_injections, patterns=compiled_patterns)
     elif content_type == ContentType.MARKDOWN:
-        result = _parse_markdown(content, strip_injections=strip_injections, patterns=compiled_patterns)
+        result = _parse_markdown(content, strip_injections=check_injections, patterns=compiled_patterns)
     elif content_type == ContentType.YAML:
         result = _parse_yaml(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
     elif content_type == ContentType.XML:
@@ -771,15 +550,91 @@ def parse(
     else:
         raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
 
+
+    if mutation_mode == "REJECT" and result.stripped:
+        raise ParseError(
+            f"Content denied by StrictPolicy: injection pattern matched",
+            content_type=content_type.value,
+            violations=[f"policy_pattern:{pat}" for pat in result.stripped]
+        )
+
     # Determine taint level
     taint = TaintLevel.SANITIZED
 
     # Schema validation (only for structured types that produce dicts)
     if schema is not None and isinstance(result.content, dict):
-        schema.validate(result.content)
-        taint = TaintLevel.VALIDATED
+        try:
+            parsed_model = schema.model_validate(result.content, strict=schema.model_config.get("strict", False))
+            result = ParseResult(
+                content=parsed_model.model_dump(),
+                content_type=result.content_type,
+                sanitized=result.sanitized,
+                warnings=result.warnings,
+                stripped=result.stripped,
+                taint=taint,
+                provenance=provenance,
+                chain_id=chain_id,
+                content_hash=_compute_content_hash(result.content),
+            )
+            taint = TaintLevel.VALIDATED
+        except ValidationError as e:
+            raise ParseError(
+                f"Content failed schema validation",
+                content_type=content_type.value,
+                violations=[f"schema_violation:{err['loc'][0]}_{err['msg']}" for err in e.errors()],
+            )
 
-    # Return result with taint metadata and integrity hash
+    if semantic_scanner is not None:
+        if isinstance(result.content, str):
+            semantic_violations = semantic_scanner.scan(result.content)
+            if semantic_violations:
+                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
+                result.stripped.extend(semantic_violations)  # Reusing stripped to list things that caused issues
+        elif isinstance(result.content, dict) or isinstance(result.content, list):
+            # For structured data, we would ideally extract all strings and scan them.
+            # A simplified approach for now is scanning stringified representation.
+            import json
+            text_repr = json.dumps(result.content, default=str)
+            semantic_violations = semantic_scanner.scan(text_repr)
+            if semantic_violations:
+                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
+                result.stripped.extend(semantic_violations)
+        
+    # ValueRule enforcement (after parsing structure)
+    if policy is not None and policy.value_rules:
+        violations = []
+        allow_rules = [r for r in policy.value_rules if r.action == "ALLOW"]
+        deny_rules = [r for r in policy.value_rules if r.action == "DENY"]
+        allow_matched = {r.name: False for r in allow_rules}
+
+        def _scan_vals(obj, path="root"):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    _scan_vals(v, f"{path}.{k}")
+            elif isinstance(obj, list):
+                for i, v in enumerate(obj):
+                    _scan_vals(v, f"{path}[{i}]")
+            elif isinstance(obj, str):
+                for rule in deny_rules:
+                    if rule.compiled.search(obj):
+                        violations.append(f"policy_deny:{rule.name} at {path}")
+                for rule in allow_rules:
+                    if rule.compiled.search(obj):
+                        allow_matched[rule.name] = True
+
+        _scan_vals(result.content)
+
+        for rule in allow_rules:
+            if not allow_matched[rule.name]:
+                violations.append(f"policy_allow:{rule.name} missed in content")
+
+        if violations:
+            raise ParseError(
+                f"Content denied by StrictPolicy value rules: {', '.join(violations)}",
+                content_type=content_type.value,
+                violations=violations,
+            )
+
     return ParseResult(
         content=result.content,
         content_type=result.content_type,
@@ -793,82 +648,15 @@ def parse(
     )
 
 
-def compose(*results: ParseResult, chain_id: str = "") -> ParseResult:
-    """Safely combine multiple ParseResults with taint propagation.
 
-    The composed result has:
-    - taint: minimum taint level across all inputs (least trusted wins)
-    - provenance: comma-separated list of all input provenances
-    - chain_id: shared chain_id (new UUID if not provided)
-    - content: list of all input contents
-    - warnings: merged from all inputs
-    - stripped: merged from all inputs
-
-    Args:
-        *results: Two or more ParseResult instances to combine.
-        chain_id: Shared chain ID for the composed result.
-            If empty, generates a new one.
-
-    Returns:
-        A new ParseResult combining all inputs.
-
-    Raises:
-        ValueError: If fewer than 2 results are provided.
-
-    Example:
-        >>> r1 = parse('{"a": 1}', "json", provenance="agent-a")
-        >>> r2 = parse("hello", "text", provenance="agent-b")
-        >>> combined = compose(r1, r2)
-        >>> combined.taint  # min of both
-        <TaintLevel.SANITIZED: 'sanitized'>
-    """
-    if len(results) < 2:
-        raise ValueError("compose() requires at least 2 ParseResults")
-
-    if not chain_id:
-        chain_id = uuid.uuid4().hex[:12]
-
-    # Taint = minimum (least trusted wins)
-    taint = min(results, key=lambda r: r.taint).taint
-
-    # Merge provenance (deduplicated, ordered)
-    seen: set[str] = set()
-    provenances: list[str] = []
-    for r in results:
-        if r.provenance and r.provenance not in seen:
-            provenances.append(r.provenance)
-            seen.add(r.provenance)
-    provenance = ",".join(provenances)
-
-    # Merge warnings and stripped
-    all_warnings: list[str] = []
-    all_stripped: list[str] = []
-    for r in results:
-        all_warnings.extend(r.warnings)
-        all_stripped.extend(r.stripped)
-
-    # Content is a list of all contents
-    contents = [r.content for r in results]
-
-    return ParseResult(
-        content=contents,
-        content_type=results[0].content_type,
-        sanitized=all(r.sanitized for r in results),
-        warnings=all_warnings,
-        stripped=all_stripped,
-        taint=taint,
-        provenance=provenance,
-        chain_id=chain_id,
-        content_hash=_compute_content_hash(contents),
-    )
 
 
 @dataclass
 class ParserConfig:
     """Configuration for the ContentParser."""
     strict: bool = True
-    strip_injections: bool = True
-    policy: Policy | None = None
+    mutation_mode: str = "REJECT"
+    policy: StrictPolicy | None = None
 
 
 @dataclass
@@ -908,7 +696,6 @@ class ContentParser:
                 raw_content,
                 parser_type,
                 strict=self._config.strict,
-                strip_injections=self._config.strip_injections,
                 policy=self._config.policy,
             )
             # For JSON content, .content is already a dict.

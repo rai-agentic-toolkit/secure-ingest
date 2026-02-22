@@ -162,3 +162,43 @@ class TestBusinessRules:
         assert "security_finding" in types
         assert "analysis_report" in types
         assert "data_summary" in types
+
+
+def make_policy(**kwargs):
+    from secure_ingest import StrictPolicy, ContentType
+    opts = {
+        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
+        'max_size_bytes': 100000,
+        'max_depth': 50
+    }
+    if 'max_size' in kwargs:
+        kwargs['max_size_bytes'] = kwargs.pop('max_size')
+    if 'strip_injections' in kwargs:
+        val = kwargs.pop('strip_injections')
+        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
+    if 'deny_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('deny_rules')
+    if 'allow_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    opts.update(kwargs)
+    return StrictPolicy(**opts)
+
+
+def make_policy(**kwargs):
+    from secure_ingest import StrictPolicy, ContentType
+    opts = {
+        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
+        'max_size_bytes': 100000,
+        'max_depth': 50
+    }
+    if 'max_size' in kwargs:
+        kwargs['max_size_bytes'] = kwargs.pop('max_size')
+    if 'strip_injections' in kwargs:
+        val = kwargs.pop('strip_injections')
+        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
+    if 'deny_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('deny_rules')
+    if 'allow_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    opts.update(kwargs)
+    return StrictPolicy(**opts)

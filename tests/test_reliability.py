@@ -321,11 +321,11 @@ class TestSafety:
         assert report.safety.metrics["violation_rate"] > 0.0
 
     def test_policy_deny_rule_increases_violation_rate(self):
-        from secure_ingest import Policy, DenyRule
+        from secure_ingest import StrictPolicy, ValueRule
         from secure_ingest.parser import ContentParser, ParserConfig
 
-        deny_rule = DenyRule(name="no_cve", pattern=r"CVE-", description="block CVE refs")
-        policy = Policy(deny_rules=(deny_rule,))
+        deny_rule = ValueRule(name="no_cve", pattern=r"CVE-", description="block CVE refs")
+        policy = make_policy(deny_rules=(deny_rule,))
         parser = ContentParser(config=ParserConfig(policy=policy))
         pipeline = IngestionPipeline(parser=parser)
         profiler = ReliabilityProfiler(pipeline)
@@ -368,3 +368,43 @@ class TestAccumulation:
         profiler.reset()
         profiler.ingest("a", "security_finding", CLEAN_FINDING)
         assert profiler.report().total_calls == 1
+
+
+def make_policy(**kwargs):
+    from secure_ingest import StrictPolicy, ContentType
+    opts = {
+        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
+        'max_size_bytes': 100000,
+        'max_depth': 50
+    }
+    if 'max_size' in kwargs:
+        kwargs['max_size_bytes'] = kwargs.pop('max_size')
+    if 'strip_injections' in kwargs:
+        val = kwargs.pop('strip_injections')
+        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
+    if 'deny_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('deny_rules')
+    if 'allow_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    opts.update(kwargs)
+    return StrictPolicy(**opts)
+
+
+def make_policy(**kwargs):
+    from secure_ingest import StrictPolicy, ContentType
+    opts = {
+        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
+        'max_size_bytes': 100000,
+        'max_depth': 50
+    }
+    if 'max_size' in kwargs:
+        kwargs['max_size_bytes'] = kwargs.pop('max_size')
+    if 'strip_injections' in kwargs:
+        val = kwargs.pop('strip_injections')
+        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
+    if 'deny_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('deny_rules')
+    if 'allow_rules' in kwargs:
+        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    opts.update(kwargs)
+    return StrictPolicy(**opts)

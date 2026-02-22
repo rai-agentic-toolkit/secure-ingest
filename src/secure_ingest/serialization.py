@@ -30,46 +30,29 @@ from pathlib import Path
 from typing import Any
 
 from .parser import (
-    AllowRule,
     ContentType,
-    DenyRule,
     InjectionPattern,
     PatternRegistry,
-    Policy,
+    StrictPolicy,
 )
+from .rules import ValueRule
 
 
-def policy_to_dict(policy: Policy) -> dict[str, Any]:
-    """Serialize a Policy to a plain dict (suitable for JSON/YAML).
-
-    The output is human-readable and round-trips through policy_from_dict().
+def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
+    """Serialize a StrictPolicy to a plain dict (suitable for JSON/YAML).
     """
     d: dict[str, Any] = {}
 
     if policy.allowed_types is not None:
         d["allowed_types"] = sorted(t.value for t in policy.allowed_types)
 
-    if policy.max_depth is not None:
-        d["max_depth"] = policy.max_depth
+    d["max_depth"] = policy.max_depth
+    d["max_size_bytes"] = policy.max_size_bytes
+    d["mutation_mode"] = policy.mutation_mode
 
-    if policy.max_size is not None:
-        d["max_size"] = policy.max_size
-
-    if policy.require_schema:
-        d["require_schema"] = True
-
-    # Only include strip_injections if it's non-default (default is True)
-    if not policy.strip_injections:
-        d["strip_injections"] = False
-
-    if policy.deny_rules:
-        d["deny_rules"] = [
-            _deny_rule_to_dict(rule) for rule in policy.deny_rules
-        ]
-
-    if policy.allow_rules:
-        d["allow_rules"] = [
-            _allow_rule_to_dict(rule) for rule in policy.allow_rules
+    if policy.value_rules:
+        d["value_rules"] = [
+            _value_rule_to_dict(rule) for rule in policy.value_rules
         ]
 
     if policy.patterns is not None:
@@ -78,81 +61,75 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
     return d
 
 
-def policy_from_dict(d: dict[str, Any]) -> Policy:
-    """Deserialize a Policy from a plain dict.
-
-    Accepts the format produced by policy_to_dict(), plus the
-    human-friendly YAML/JSON config format documented in the module docstring.
-
-    Raises:
-        ValueError: If the dict contains invalid values (unknown content types,
-            missing required fields in deny rules/patterns, etc.).
+def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
+    """Deserialize a StrictPolicy from a plain dict.
     """
     # allowed_types
-    allowed_types = None
-    if "allowed_types" in d:
-        raw_types = d["allowed_types"]
-        if not isinstance(raw_types, list):
-            raise ValueError(f"allowed_types must be a list, got {type(raw_types).__name__}")
-        types = set()
-        for t in raw_types:
-            try:
-                types.add(ContentType(t.lower()))
-            except ValueError:
-                valid = ", ".join(ct.value for ct in ContentType)
-                raise ValueError(f"Unknown content type '{t}' (valid: {valid})")
-        allowed_types = frozenset(types) if types else None
+    if "allowed_types" not in d:
+        raise ValueError("allowed_types is required for StrictPolicy")
+    raw_types = d["allowed_types"]
+    if not isinstance(raw_types, list):
+        raise ValueError(f"allowed_types must be a list, got {type(raw_types).__name__}")
+    types = set()
+    for t in raw_types:
+        try:
+            types.add(ContentType(t.lower()))
+        except ValueError:
+            valid = ", ".join(ct.value for ct in ContentType)
+            raise ValueError(f"Unknown content type '{t}' (valid: {valid})")
+    allowed_types = frozenset(types)
 
-    # max_depth
-    max_depth = d.get("max_depth")
-    if max_depth is not None:
-        max_depth = int(max_depth)
+    max_depth = int(d["max_depth"]) if "max_depth" in d else 50
+    max_size_bytes = int(d["max_size_bytes"]) if "max_size_bytes" in d else 50000
 
-    # max_size
-    max_size = d.get("max_size")
-    if max_size is not None:
-        max_size = int(max_size)
+    if "mutation_mode" in d:
+        mutation_mode = str(d["mutation_mode"])
+    elif "strip_injections" in d:
+        # Backward compatibility: strip_injections=True meant we removed them. 
+        # In V2, we REJECT them instead of silently stripping, for maximum strictness.
+        mutation_mode = "REJECT" if d["strip_injections"] else "IGNORE"
+    else:
+        mutation_mode = "REJECT"
 
-    # require_schema
-    require_schema = bool(d.get("require_schema", False))
-
-    # strip_injections (default True)
-    strip_injections = bool(d.get("strip_injections", True))
-
-    # deny_rules
-    deny_rules: tuple[DenyRule, ...] = ()
+    value_rules_list = []
+    if "value_rules" in d:
+        rules_raw = d["value_rules"]
+        if not isinstance(rules_raw, list):
+            raise ValueError(f"value_rules must be a list, got {type(rules_raw).__name__}")
+        value_rules_list.extend([_value_rule_from_dict(r) for r in rules_raw])
+        
+    # Backward compatibility
     if "deny_rules" in d:
         rules_raw = d["deny_rules"]
-        if not isinstance(rules_raw, list):
-            raise ValueError(f"deny_rules must be a list, got {type(rules_raw).__name__}")
-        deny_rules = tuple(_deny_rule_from_dict(r) for r in rules_raw)
-
-    # allow_rules
-    allow_rules: tuple[AllowRule, ...] = ()
+        if isinstance(rules_raw, list):
+            for r in rules_raw:
+                r["action"] = "DENY"
+                value_rules_list.append(_value_rule_from_dict(r))
+                
     if "allow_rules" in d:
         rules_raw = d["allow_rules"]
-        if not isinstance(rules_raw, list):
-            raise ValueError(f"allow_rules must be a list, got {type(rules_raw).__name__}")
-        allow_rules = tuple(_allow_rule_from_dict(r) for r in rules_raw)
+        if isinstance(rules_raw, list):
+            for r in rules_raw:
+                r["action"] = "ALLOW"
+                value_rules_list.append(_value_rule_from_dict(r))
 
-    # patterns
+    value_rules = tuple(value_rules_list)
+
     patterns = None
     if "patterns" in d:
         patterns = _registry_from_dict(d["patterns"])
 
-    return Policy(
+    return StrictPolicy(
         allowed_types=allowed_types,
+        max_size_bytes=max_size_bytes,
         max_depth=max_depth,
-        max_size=max_size,
-        require_schema=require_schema,
+        mutation_mode=mutation_mode,
+        value_rules=value_rules,
         patterns=patterns,
-        strip_injections=strip_injections,
-        deny_rules=deny_rules,
-        allow_rules=allow_rules,
     )
 
 
-def policy_to_json(policy: Policy, path: str | Path | None = None, indent: int = 2) -> str:
+def policy_to_json(policy: StrictPolicy, path: str | Path | None = None, indent: int = 2) -> str:
     """Serialize a Policy to JSON string. Optionally write to a file."""
     d = policy_to_dict(policy)
     s = json.dumps(d, indent=indent)
@@ -161,7 +138,7 @@ def policy_to_json(policy: Policy, path: str | Path | None = None, indent: int =
     return s
 
 
-def policy_from_json(source: str | Path) -> Policy:
+def policy_from_json(source: str | Path) -> StrictPolicy:
     """Load a Policy from a JSON string or file path.
 
     If source looks like a file path (contains / or \\, or ends in .json),
@@ -181,7 +158,7 @@ def policy_from_json(source: str | Path) -> Policy:
     return policy_from_dict(d)
 
 
-def policy_to_yaml(policy: Policy, path: str | Path | None = None) -> str:
+def policy_to_yaml(policy: StrictPolicy, path: str | Path | None = None) -> str:
     """Serialize a Policy to YAML string. Optionally write to a file.
 
     Requires PyYAML (pip install secure-ingest[yaml]).
@@ -198,7 +175,7 @@ def policy_to_yaml(policy: Policy, path: str | Path | None = None) -> str:
     return s
 
 
-def policy_from_yaml(source: str | Path) -> Policy:
+def policy_from_yaml(source: str | Path) -> StrictPolicy:
     """Load a Policy from a YAML string or file path.
 
     If source looks like a file path (contains / or \\, or ends in .yaml/.yml),
@@ -228,39 +205,21 @@ def policy_from_yaml(source: str | Path) -> Policy:
 
 # --- Internal helpers ---
 
-def _deny_rule_to_dict(rule: DenyRule) -> dict[str, str]:
-    d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern}
+def _value_rule_to_dict(rule: ValueRule) -> dict[str, str]:
+    d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern, "action": rule.action}
     if rule.description:
         d["description"] = rule.description
     return d
 
-
-def _deny_rule_from_dict(d: dict[str, Any]) -> DenyRule:
+def _value_rule_from_dict(d: dict[str, Any]) -> ValueRule:
     if "name" not in d or "pattern" not in d:
-        raise ValueError(f"deny_rule requires 'name' and 'pattern', got keys: {list(d.keys())}")
-    return DenyRule(
+        raise ValueError(f"value_rule requires 'name' and 'pattern', got keys: {list(d.keys())}")
+    return ValueRule(
         name=str(d["name"]),
         pattern=str(d["pattern"]),
+        action=str(d.get("action", "DENY")),
         description=str(d.get("description", "")),
     )
-
-
-def _allow_rule_to_dict(rule: AllowRule) -> dict[str, str]:
-    d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern}
-    if rule.description:
-        d["description"] = rule.description
-    return d
-
-
-def _allow_rule_from_dict(d: dict[str, Any]) -> AllowRule:
-    if "name" not in d or "pattern" not in d:
-        raise ValueError(f"allow_rule requires 'name' and 'pattern', got keys: {list(d.keys())}")
-    return AllowRule(
-        name=str(d["name"]),
-        pattern=str(d["pattern"]),
-        description=str(d.get("description", "")),
-    )
-
 
 def _registry_to_dict(registry: PatternRegistry) -> dict[str, Any]:
     """Serialize a PatternRegistry to dict.

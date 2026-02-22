@@ -1,10 +1,10 @@
-"""secure-ingest: Stateless sandboxed content parser for AI agent ingestion."""
+"""secure-ingest: Payload hygiene and content validation layer for AI agent ingestion."""
 
 from .parser import (
-    parse, compose, ParseResult, ParseError, ContentType, TaintLevel,
-    Policy, DenyRule, AllowRule, InjectionPattern, PatternRegistry, BUILTIN_PATTERNS,
+    parse, ParseResult, ParseError, ContentType, TaintLevel,
+    StrictPolicy, InjectionPattern, PatternRegistry, BUILTIN_PATTERNS,
 )
-from .schema import Schema, Field, SchemaError
+from .rules import ValueRule
 from .serialization import (
     policy_to_dict, policy_from_dict,
     policy_to_json, policy_from_json,
@@ -19,12 +19,12 @@ from .structure import (
     ToolGraph, StructureMonitor, StructureViolationError,
 )
 from .reliability import ReliabilityProfiler, ReliabilityReport, DimensionScore
+from .llm import ValidatedPayload
 
 __version__ = "1.0.0"
 __all__ = [
-    "parse", "compose", "ParseResult", "ParseError", "ContentType", "TaintLevel",
-    "Policy", "DenyRule", "AllowRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
-    "Schema", "Field", "SchemaError",
+    "parse", "ParseResult", "ParseError", "ContentType", "TaintLevel",
+    "StrictPolicy", "ValueRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
     "policy_to_dict", "policy_from_dict",
     "policy_to_json", "policy_from_json",
     "policy_to_yaml", "policy_from_yaml",
@@ -33,4 +33,5 @@ __all__ = [
     "IngestionPipeline", "IngestResult",
     "ToolGraph", "StructureMonitor", "StructureViolationError",
     "ReliabilityProfiler", "ReliabilityReport", "DimensionScore",
+    "ValidatedPayload"
 ]
