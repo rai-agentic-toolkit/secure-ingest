@@ -10,8 +10,16 @@ Design principles:
 - Enforces a minimum taint level before sending
 """
 
+from dataclasses import dataclass
 from typing import Any, Callable
-from .parser import ParseResult, TaintLevel
+from .parser import ContentType
+
+@dataclass(frozen=True)
+class ValidatedPayload:
+    """A strictly validated payload ready for backend execution."""
+    content: Any
+    content_type: ContentType
+    chain_id: str
 
 class SecurityException(Exception):
     """Raised when the LLM wrapper intercepts an unsafe or invalid payload."""
@@ -29,18 +37,15 @@ class SecureLLMWrapper:
     def __init__(
         self, 
         client: Any, 
-        generation_method: str = "generate", 
-        min_taint: TaintLevel = TaintLevel.VALIDATED
+        generation_method: str = "generate",
     ):
         """
         Args:
             client: The underlying LLM client object (e.g., openai.chat.completions)
             generation_method: The name of the method to intercept (e.g., "create")
-            min_taint: The minimum required TaintLevel for the payload to be passed through
         """
         self._client = client
         self._method_name = generation_method
-        self._min_taint = min_taint
         
     def __getattr__(self, name: str) -> Any:
         """
@@ -69,20 +74,15 @@ class SecureLLMWrapper:
                 raise SecurityException("Could not identify the payload in the method arguments.")
         
         # In a list of messages context (like OpenAI), we need to check if ANY of the messages
-        # are ParseResults and enforce policy on them. For simplicity in the generic wrapper,
-        # we expect the primary payload parameter (e.g. the single string prompt) to be the ParseResult.
+        # are ValidatedPayloads and enforce policy on them. For simplicity in the generic wrapper,
+        # we expect the primary payload parameter (e.g. the single string prompt) to be the ValidatedPayload.
         # If the user passes a list, this generic wrapper expects the user to have validated the entire list
-        # or wrapped the individual string components. If the entire list isn't a ParseResult, we reject.
+        # or wrapped the individual string components. If the entire list isn't a ValidatedPayload, we reject.
         
-        if not isinstance(payload, ParseResult):
+        if not isinstance(payload, ValidatedPayload):
             raise SecurityException(
-                f"LLM wrapper strictly requires a ParseResult. Received: {type(payload).__name__}. "
+                f"LLM wrapper strictly requires a ValidatedPayload. Received: {type(payload).__name__}. "
                 "Raw strings or unvalidated objects are not permitted."
-            )
-            
-        if payload.taint < self._min_taint:
-            raise SecurityException(
-                f"Payload rejected: Taint level {payload.taint} does not meet required {self._min_taint}."
             )
         
         # Extract the clean content

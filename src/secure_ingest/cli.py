@@ -19,13 +19,13 @@ import sys
 from pathlib import Path
 
 from .anomaly import SemanticAnomalyDetector
-from .parser import ContentParser, ParserConfig, Policy
+from .parser import ContentParser, ParserConfig, StrictPolicy
 from .pipeline import IngestionPipeline
 from .schemas import SCHEMA_REGISTRY
 from .validator import SchemaValidator
 
 
-def _load_policy(path_str: str) -> Policy:
+def _load_policy(path_str: str) -> StrictPolicy:
     """Load a Policy from a YAML or JSON file."""
     path = Path(path_str)
     if not path.exists():
