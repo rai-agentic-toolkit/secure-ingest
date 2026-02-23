@@ -37,11 +37,31 @@ from .parser import (
 )
 from .rules import ValueRule
 
+# Current schema version written into all serialized policies.
+# Bump this when the format changes in a breaking way.
+_SCHEMA_VERSION = 2
+
+
+class PolicyVersionError(ValueError):
+    """Raised when a serialized policy has an unknown or unsupported schema version."""
+
+    def __init__(self, found: int, supported: int):
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"Unsupported policy schema_version {found!r} "
+            f"(this library supports up to version {supported}). "
+            "Upgrade secure-ingest or regenerate the policy file."
+        )
+
 
 def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
     """Serialize a StrictPolicy to a plain dict (suitable for JSON/YAML).
+
+    The output always includes ``schema_version`` so that future library
+    versions can detect and migrate stale policy files.
     """
-    d: dict[str, Any] = {}
+    d: dict[str, Any] = {"schema_version": _SCHEMA_VERSION}
 
     if policy.allowed_types is not None:
         d["allowed_types"] = sorted(t.value for t in policy.allowed_types)
@@ -63,7 +83,16 @@ def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
 
 def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     """Deserialize a StrictPolicy from a plain dict.
+
+    Validates ``schema_version`` if present. Version 1 policies (no version
+    field) are accepted with a ``mutation_mode`` migration: the old default
+    was ``REJECT``; if a v1 file omits ``mutation_mode`` we preserve that
+    intent. Version 2+ files use ``IGNORE`` as the default.
     """
+    schema_version = int(d.get("schema_version", 1))
+    if schema_version > _SCHEMA_VERSION:
+        raise PolicyVersionError(found=schema_version, supported=_SCHEMA_VERSION)
+
     # allowed_types
     if "allowed_types" not in d:
         raise ValueError("allowed_types is required for StrictPolicy")
@@ -85,11 +114,15 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     if "mutation_mode" in d:
         mutation_mode = str(d["mutation_mode"])
     elif "strip_injections" in d:
-        # Backward compatibility: strip_injections=True meant we removed them. 
-        # In V2, we REJECT them instead of silently stripping, for maximum strictness.
+        # Backward compatibility with v1 strip_injections boolean.
         mutation_mode = "REJECT" if d["strip_injections"] else "IGNORE"
-    else:
+    elif schema_version < 2:
+        # v1 policy with no mutation_mode: preserve old REJECT default
+        # to avoid silently changing behaviour on upgrade.
         mutation_mode = "REJECT"
+    else:
+        # v2+ policy with no mutation_mode: use current library default
+        mutation_mode = "IGNORE"
 
     value_rules_list = []
     if "value_rules" in d:

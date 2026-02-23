@@ -301,28 +301,49 @@ BUILTIN_PATTERNS: tuple[InjectionPattern, ...] = (
 class PatternRegistry:
     """Registry for injection detection patterns.
 
-    Allows adding custom patterns, disabling built-in ones,
-    or replacing the entire pattern set.
+    Allows adding custom patterns, disabling built-in ones, or replacing the
+    entire pattern set. Once passed to a ``StrictPolicy``, the registry is
+    frozen and will reject further mutations.
 
-    Example:
-        >>> registry = PatternRegistry()
-        >>> registry.add(InjectionPattern("custom", r"(?i)reveal.*secret", "Secret extraction"))
-        >>> registry.disable("role_hijack")
-        >>> parse("text", ContentType.TEXT, patterns=registry)
+    Example::
+
+        registry = PatternRegistry()
+        registry.add(InjectionPattern("custom", r"(?i)reveal.*secret", "Secret extraction"))
+        registry.disable("role_hijack")
+        parse("text", ContentType.TEXT, patterns=registry)
     """
 
     def __init__(self, *, include_builtins: bool = True) -> None:
         self._patterns: dict[str, InjectionPattern] = {}
+        self._frozen: bool = False
         if include_builtins:
             for p in BUILTIN_PATTERNS:
                 self._patterns[p.name] = p
 
+    def freeze(self) -> "PatternRegistry":
+        """Lock this registry against further mutations. Called automatically
+        when the registry is embedded in a ``StrictPolicy``.
+
+        Returns self for chaining.
+        """
+        self._frozen = True
+        return self
+
+    def _check_mutable(self) -> None:
+        if self._frozen:
+            raise RuntimeError(
+                "PatternRegistry is frozen — it has been embedded in a StrictPolicy "
+                "and can no longer be modified. Create a new PatternRegistry instead."
+            )
+
     def add(self, pattern: InjectionPattern) -> None:
         """Add or replace a pattern by name."""
+        self._check_mutable()
         self._patterns[pattern.name] = pattern
 
     def disable(self, name: str) -> None:
         """Remove a pattern by name. No-op if not present."""
+        self._check_mutable()
         self._patterns.pop(name, None)
 
     def get_patterns(self) -> list[tuple[re.Pattern[str], str]]:
@@ -368,6 +389,11 @@ class StrictPolicy:
             logging.getLogger(__name__).warning(
                 "StrictPolicy allows payloads > 1MB. Ensure downstream LLM context can handle this."
             )
+        # Freeze the registry so it can't be mutated after being embedded here.
+        # This closes the invariant: a frozen dataclass must not contain
+        # mutable objects that silently invalidate its immutability guarantee.
+        if self.patterns is not None:
+            self.patterns.freeze()
 
     @staticmethod
     def compose(*policies: "StrictPolicy") -> "StrictPolicy":

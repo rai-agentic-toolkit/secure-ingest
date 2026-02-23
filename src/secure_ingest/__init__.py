@@ -16,6 +16,7 @@ from .serialization import (
     policy_to_dict, policy_from_dict,
     policy_to_json, policy_from_json,
     policy_to_yaml, policy_from_yaml,
+    PolicyVersionError,
 )
 from .budget import (
     BudgetConfig, RequestBudget,
@@ -44,6 +45,7 @@ __all__ = [
     "policy_to_dict", "policy_from_dict",
     "policy_to_json", "policy_from_json",
     "policy_to_yaml", "policy_from_yaml",
+    "PolicyVersionError",
     # Budget & structure
     "BudgetConfig", "RequestBudget",
     "BudgetExhaustedError", "CycleDetectedError",

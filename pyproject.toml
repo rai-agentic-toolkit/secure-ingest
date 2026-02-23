@@ -40,3 +40,6 @@ secure-ingest = "secure_ingest.cli:entry_point"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+secure_ingest = ["py.typed"]
