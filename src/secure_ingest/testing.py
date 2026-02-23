@@ -30,7 +30,7 @@ from typing import Any
 from .parser import ContentType, ParseResult, TaintLevel
 
 
-def _hash(content: Any) -> str:
+def _hash(content: dict[str, Any] | Any) -> str:
     if isinstance(content, str):
         raw = content.encode("utf-8")
     elif isinstance(content, bytes):
@@ -40,17 +40,17 @@ def _hash(content: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _freeze(content: Any) -> Any:
+def _deep_freeze(content: dict[str, Any] | Any) -> Any:
     """Recursively freeze dicts/lists for VALIDATED results."""
     if isinstance(content, dict):
-        return types.MappingProxyType({k: _freeze(v) for k, v in content.items()})
+        return types.MappingProxyType({k: _deep_freeze(v) for k, v in content.items()})
     if isinstance(content, list):
-        return tuple(_freeze(item) for item in content)
+        return tuple(_deep_freeze(item) for item in content)
     return content
 
 
 def make_validated_result(
-    content: dict | Any,
+    content: dict[str, Any] | Any,
     *,
     content_type: ContentType = ContentType.JSON,
     provenance: str = "testing",
@@ -72,7 +72,7 @@ def make_validated_result(
     Returns:
         ``ParseResult`` with ``taint=TaintLevel.VALIDATED``.
     """
-    frozen = _freeze(content) if isinstance(content, (dict, list)) else content
+    frozen = _deep_freeze(content) if isinstance(content, dict | list) else content
     return ParseResult(
         content=frozen,
         content_type=content_type,

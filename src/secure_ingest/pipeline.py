@@ -18,7 +18,7 @@ from typing import Any
 
 from .anomaly import SemanticAnomalyDetector
 from .budget import BudgetExhaustedError, CycleDetectedError, RequestBudget
-from .parser import ContentParser, ParserConfig
+from .parser import ContentParser
 from .structure import StructureMonitor, StructureViolationError
 from .trust import ContentDecision, ContentEnvelope, TrustBoundary
 from .validator import SchemaValidator
@@ -151,8 +151,17 @@ class IngestionPipeline:
             return self._build_result(envelope, include_audit)
 
         # Stage 3: Schema validation
+        if content_type is None:
+            # We already warned in admission; default to TEXT if we reached here
+            content_type = "text"
+
+        parsed_content = envelope.parsed_content
+        if not isinstance(parsed_content, dict):
+            parsed_content = {}
+
         validation = self._validator.validate(
-            envelope.parsed_content, content_type  # type: ignore[arg-type]
+            parsed_content,
+            content_type,
         )
         envelope.audit(
             "validation",
@@ -214,9 +223,7 @@ class IngestionPipeline:
             result.structure_snapshot = self._structure.snapshot()
         return result
 
-    def _build_result(
-        self, envelope: ContentEnvelope, include_audit: bool
-    ) -> IngestResult:
+    def _build_result(self, envelope: ContentEnvelope, include_audit: bool) -> IngestResult:
         decision = envelope.decision
         decision_str = decision.value if decision else "unknown"
 
@@ -237,7 +244,9 @@ class IngestionPipeline:
             decision=decision_str,
             content_type=envelope.content_type,
             source_agent_id=envelope.source_agent_id,
-            validated_content=envelope.parsed_content if decision == ContentDecision.ACCEPTED else None,
+            validated_content=envelope.parsed_content
+            if decision == ContentDecision.ACCEPTED
+            else None,
             errors=envelope.validation_errors or None,
             anomaly_score=envelope.anomaly_score,
             anomaly_details=envelope.anomaly_details or None,

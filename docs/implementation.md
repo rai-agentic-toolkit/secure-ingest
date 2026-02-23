@@ -11,7 +11,7 @@ This guide provides step-by-step instructions for deploying and operating the Se
 ```bash
 # Minimum hardware requirements
 CPU: 4+ cores (8+ recommended for production)
-RAM: 8GB+ (16GB+ recommended)  
+RAM: 8GB+ (16GB+ recommended)
 Storage: 100GB+ SSD
 Network: 1Gbps+ connection
 
@@ -33,7 +33,7 @@ export DB_USER="secure_user"
 export DB_PASSWORD="strong_random_password"
 export DB_NAME="secure_ingest"
 
-# Redis credentials  
+# Redis credentials
 export REDIS_PASSWORD="redis_auth_password"
 
 # SSL certificates for production
@@ -94,7 +94,7 @@ API_HOST=0.0.0.0
 API_PORT=8000
 API_WORKERS=4
 
-# LLM Configuration  
+# LLM Configuration
 LLM_API_KEY=your_api_key_here
 LLM_MODEL=gpt-3.5-turbo
 LLM_MAX_TOKENS=2048
@@ -242,7 +242,7 @@ services:
   # Content parser service
   content-parser:
     build:
-      context: ./src  
+      context: ./src
       dockerfile: Dockerfile.parser
     environment:
       - LLM_API_KEY=${LLM_API_KEY}
@@ -265,7 +265,7 @@ services:
           memory: 2G
           cpus: '1'
 
-  # Schema validator service  
+  # Schema validator service
   schema-validator:
     build:
       context: ./src
@@ -288,7 +288,7 @@ services:
   anomaly-detector:
     build:
       context: ./src
-      dockerfile: Dockerfile.detector  
+      dockerfile: Dockerfile.detector
     environment:
       - REDIS_URL=${REDIS_URL}
       - MODEL_PATH=/app/models
@@ -314,7 +314,7 @@ services:
     container_name: secure-ingest-db
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}  
+      - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -696,7 +696,7 @@ sudo certbot --nginx -d your-domain.com
 
 # Configure firewall
 sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp  
+sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw --force enable
 

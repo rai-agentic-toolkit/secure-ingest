@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "secure-ingest"
-version = "2.1.0"
+version = "2.2.0"
 description = "Payload hygiene and content validation layer for AI agent ingestion"
 readme = "README.md"
 license = "MIT"
@@ -30,6 +30,16 @@ dependencies = [
 
 [project.optional-dependencies]
 yaml = ["pyyaml>=6.0"]
+dev = [
+    "pyyaml>=6.0",
+    "pytest>=7.0",
+    "pre-commit>=3.0",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "bandit>=1.8",
+    "detect-secrets>=1.5",
+    "types-PyYAML",
+]
 
 [project.urls]
 Homepage = "https://github.com/rai-tools/secure-ingest"
@@ -43,3 +53,54 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 secure_ingest = ["py.typed"]
+
+# --- Ruff: lint + format ---
+[tool.ruff]
+target-version = "py310"
+line-length = 99
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print
+]
+ignore = [
+    "S101",  # use of assert (fine in tests)
+    "S603",  # subprocess call (not used here but common FP)
+    "B008",  # function call in default arg (Pydantic pattern)
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S",    # all bandit/security rules — test files have intentional bad patterns
+    "T20",  # print statements are fine in tests
+    "F811", # duplicate make_policy helper defined per-class in test files
+    "C408", # dict() literal style fine in test helpers
+]
+"src/secure_ingest/cli.py" = [
+    "T20",  # CLI tool writes to stdout intentionally
+]
+
+# --- Bandit: security linting ---
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv"]
+skips = ["B101"]  # assert statements — fine in library code
+
+# --- Mypy ---
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+files = ["src/"]
+
+# --- pytest ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]

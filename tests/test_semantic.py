@@ -1,29 +1,34 @@
 """Tests for secure_ingest.semantic — SemanticValidator Protocol and backward-compat."""
+
 import types
+
 import pytest
 
-from secure_ingest import parse, ContentType, TaintLevel, StrictPolicy, SemanticValidator
+from secure_ingest import ContentType, SemanticValidator, StrictPolicy, TaintLevel, parse
 from secure_ingest.semantic import BaseSemanticScanner
-
 
 # ---------------------------------------------------------------------------
 # New Protocol-based implementations
 # ---------------------------------------------------------------------------
 
+
 class AllowAll:
     """SemanticValidator that always accepts."""
+
     def validate(self, payload: str) -> bool:
         return True
 
 
 class DenyEvil:
     """SemanticValidator that rejects payloads containing 'evil'."""
+
     def validate(self, payload: str) -> bool:
         return "evil" not in payload.lower()
 
 
 class DenyToxic:
     """SemanticValidator that rejects payloads containing 'toxic'."""
+
     def validate(self, payload: str) -> bool:
         return "toxic" not in payload.lower()
 
@@ -31,6 +36,7 @@ class DenyToxic:
 # ---------------------------------------------------------------------------
 # Legacy scan()-based implementation (backward compat)
 # ---------------------------------------------------------------------------
+
 
 class LegacyScanner(BaseSemanticScanner):
     def scan(self, text: str) -> list[str]:
@@ -43,6 +49,7 @@ class LegacyScanner(BaseSemanticScanner):
 # Protocol duck-typing check
 # ---------------------------------------------------------------------------
 
+
 def test_semantic_validator_is_protocol():
     assert isinstance(DenyEvil(), SemanticValidator)
     assert isinstance(AllowAll(), SemanticValidator)
@@ -51,6 +58,7 @@ def test_semantic_validator_is_protocol():
 # ---------------------------------------------------------------------------
 # parse() with semantic_scanner= kwarg (backward compat path via scan())
 # ---------------------------------------------------------------------------
+
 
 def test_legacy_scanner_clean_text():
     scanner = LegacyScanner()
@@ -80,6 +88,7 @@ def test_legacy_scanner_json():
 # parse() with new validate() Protocol validators via StrictPolicy
 # ---------------------------------------------------------------------------
 
+
 def _make_policy(**extra):
     base = dict(
         allowed_types=frozenset({ContentType.TEXT, ContentType.JSON}),
@@ -99,6 +108,7 @@ def test_validate_protocol_clean_passes():
 def test_validate_protocol_rejects_payload():
     policy = _make_policy(semantic_validators=(DenyEvil(),))
     from secure_ingest import ParseError
+
     with pytest.raises(ParseError) as exc_info:
         parse("I have evil intent", ContentType.TEXT, policy=policy)
     assert any("semantic_validator_rejected" in v for v in exc_info.value.violations)
@@ -108,6 +118,7 @@ def test_multiple_validators_both_must_pass():
     """If any validator rejects, ParseError is raised."""
     policy = _make_policy(semantic_validators=(AllowAll(), DenyEvil()))
     from secure_ingest import ParseError
+
     with pytest.raises(ParseError):
         parse("this is evil content", ContentType.TEXT, policy=policy)
 
@@ -139,6 +150,7 @@ def test_compose_deduplicates_same_validator_instance():
 # ---------------------------------------------------------------------------
 # MappingProxyType — validated content must be frozen
 # ---------------------------------------------------------------------------
+
 
 def test_validated_content_is_mapping_proxy():
     from pydantic import BaseModel

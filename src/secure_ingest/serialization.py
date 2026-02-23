@@ -71,9 +71,7 @@ def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
     d["mutation_mode"] = policy.mutation_mode
 
     if policy.value_rules:
-        d["value_rules"] = [
-            _value_rule_to_dict(rule) for rule in policy.value_rules
-        ]
+        d["value_rules"] = [_value_rule_to_dict(rule) for rule in policy.value_rules]
 
     if policy.patterns is not None:
         d["patterns"] = _registry_to_dict(policy.patterns)
@@ -103,9 +101,9 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     for t in raw_types:
         try:
             types.add(ContentType(t.lower()))
-        except ValueError:
+        except ValueError as err:
             valid = ", ".join(ct.value for ct in ContentType)
-            raise ValueError(f"Unknown content type '{t}' (valid: {valid})")
+            raise ValueError(f"Unknown content type '{t}' (valid: {valid})") from err
     allowed_types = frozenset(types)
 
     max_depth = int(d["max_depth"]) if "max_depth" in d else 50
@@ -130,7 +128,7 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
         if not isinstance(rules_raw, list):
             raise ValueError(f"value_rules must be a list, got {type(rules_raw).__name__}")
         value_rules_list.extend([_value_rule_from_dict(r) for r in rules_raw])
-        
+
     # Backward compatibility
     if "deny_rules" in d:
         rules_raw = d["deny_rules"]
@@ -138,7 +136,7 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
             for r in rules_raw:
                 r["action"] = "DENY"
                 value_rules_list.append(_value_rule_from_dict(r))
-                
+
     if "allow_rules" in d:
         rules_raw = d["allow_rules"]
         if isinstance(rules_raw, list):
@@ -198,9 +196,10 @@ def policy_to_yaml(policy: StrictPolicy, path: str | Path | None = None) -> str:
     """
     try:
         import yaml
-    except ImportError:
-        raise ImportError("PyYAML is required for YAML serialization: pip install secure-ingest[yaml]")
-
+    except ImportError as err:
+        raise ImportError(
+            "PyYAML is required for YAML serialization: pip install secure-ingest[yaml]"
+        ) from err
     d = policy_to_dict(policy)
     s = yaml.dump(d, default_flow_style=False, sort_keys=False)
     if path is not None:
@@ -218,9 +217,10 @@ def policy_from_yaml(source: str | Path) -> StrictPolicy:
     """
     try:
         import yaml
-    except ImportError:
-        raise ImportError("PyYAML is required for YAML serialization: pip install secure-ingest[yaml]")
-
+    except ImportError as err:
+        raise ImportError(
+            "PyYAML is required for YAML serialization: pip install secure-ingest[yaml]"
+        ) from err
     path = Path(source)
     if path.suffix in (".yaml", ".yml") or "/" in str(source) or "\\" in str(source):
         try:
@@ -238,11 +238,13 @@ def policy_from_yaml(source: str | Path) -> StrictPolicy:
 
 # --- Internal helpers ---
 
+
 def _value_rule_to_dict(rule: ValueRule) -> dict[str, str]:
     d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern, "action": rule.action}
     if rule.description:
         d["description"] = rule.description
     return d
+
 
 def _value_rule_from_dict(d: dict[str, Any]) -> ValueRule:
     if "name" not in d or "pattern" not in d:
@@ -254,6 +256,7 @@ def _value_rule_from_dict(d: dict[str, Any]) -> ValueRule:
         description=str(d.get("description", "")),
     )
 
+
 def _registry_to_dict(registry: PatternRegistry) -> dict[str, Any]:
     """Serialize a PatternRegistry to dict.
 
@@ -261,6 +264,7 @@ def _registry_to_dict(registry: PatternRegistry) -> dict[str, Any]:
     Custom patterns (non-builtin) are listed under "custom".
     """
     from .parser import BUILTIN_PATTERNS
+
     builtin_names = {p.name for p in BUILTIN_PATTERNS}
     current_names = set(registry.names())
 

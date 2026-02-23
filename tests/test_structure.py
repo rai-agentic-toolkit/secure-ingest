@@ -1,12 +1,12 @@
 """Tests for tool-call structure enforcement."""
 
 import pytest
+
 from secure_ingest.structure import (
-    ToolGraph,
     StructureMonitor,
     StructureViolationError,
+    ToolGraph,
 )
-
 
 # --- ToolGraph ---
 
@@ -57,9 +57,7 @@ class TestToolGraph:
         assert g.is_transition_allowed("parse", "store")
 
     def test_no_transitions_for_source_in_allow_mode(self):
-        g = ToolGraph(
-            transitions={"parse": frozenset({"validate"})}
-        )
+        g = ToolGraph(transitions={"parse": frozenset({"validate"})})
         # "store" has no outgoing edges defined
         assert not g.is_transition_allowed("store", "parse")
 
@@ -276,40 +274,58 @@ class TestStructureViolationError:
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)

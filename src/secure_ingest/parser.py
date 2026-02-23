@@ -15,17 +15,22 @@ import json
 import re
 import types
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, List, Type
-from pydantic import BaseModel, ValidationError
-from .rules import ValueRule
+from typing import Any, TypeVar
 
-from .semantic import SemanticValidator, BaseSemanticScanner
+from pydantic import BaseModel, ValidationError
+
+from .rules import ValueRule
+from .semantic import BaseSemanticScanner, SemanticValidator
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 class ContentType(Enum):
     """Supported content types for ingestion."""
+
     JSON = "json"
     TEXT = "text"
     MARKDOWN = "markdown"
@@ -41,21 +46,22 @@ class TaintLevel(Enum):
     - SANITIZED: Processed by secure-ingest, injection patterns stripped/detected.
     - VALIDATED: Sanitized AND passed schema validation.
     """
+
     UNTRUSTED = "untrusted"
     SANITIZED = "sanitized"
     VALIDATED = "validated"
 
-    def __lt__(self, other: "TaintLevel") -> bool:
+    def __lt__(self, other: TaintLevel) -> bool:
         order = {TaintLevel.UNTRUSTED: 0, TaintLevel.SANITIZED: 1, TaintLevel.VALIDATED: 2}
         return order[self] < order[other]
 
-    def __le__(self, other: "TaintLevel") -> bool:
+    def __le__(self, other: TaintLevel) -> bool:
         return self == other or self < other
 
-    def __gt__(self, other: "TaintLevel") -> bool:
+    def __gt__(self, other: TaintLevel) -> bool:
         return not self <= other
 
-    def __ge__(self, other: "TaintLevel") -> bool:
+    def __ge__(self, other: TaintLevel) -> bool:
         return not self < other
 
 
@@ -66,8 +72,9 @@ class ParseError(Exception):
     ``except ParseError`` handlers continue to work unchanged.
     """
 
-    def __init__(self, message: str, content_type: str | None = None,
-                 violations: list[str] | None = None):
+    def __init__(
+        self, message: str, content_type: str | None = None, violations: list[str] | None = None
+    ):
         super().__init__(message)
         self.content_type = content_type
         self.violations = violations or []
@@ -101,7 +108,7 @@ class DepthExceededError(ParseError):
 class SchemaValidationError(ParseError):
     """Content failed Pydantic schema validation."""
 
-    def __init__(self, pydantic_errors: list[dict], content_type: str | None = None):
+    def __init__(self, pydantic_errors: list[dict[str, Any]], content_type: str | None = None):
         self.pydantic_errors = pydantic_errors
         violations = [f"schema_violation:{err['loc'][0]}_{err['msg']}" for err in pydantic_errors]
         super().__init__(
@@ -143,7 +150,7 @@ def _compute_content_hash(content: Any) -> str:
     Deterministic: same content always produces the same hash,
     regardless of dict key ordering (uses sort_keys for JSON).
     """
-    if isinstance(content, (str, bytes)):
+    if isinstance(content, str | bytes):
         raw = content.encode("utf-8") if isinstance(content, str) else content
     else:
         raw = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
@@ -164,10 +171,10 @@ def _deep_freeze(obj: Any) -> Any:
     return obj
 
 
-
 @dataclass(frozen=True)
 class ParseResult:
     """Immutable result from parsing content."""
+
     content: Any
     content_type: ContentType
     sanitized: bool
@@ -188,7 +195,7 @@ class ParseResult:
             return True
         return self.content_hash == _compute_content_hash(self.content)
 
-    def as_validated(self) -> "ParseResult":
+    def as_validated(self) -> ParseResult:
         """Return self if taint level is VALIDATED, otherwise raise ParseError.
 
         Use this to assert trust at a boundary without manually checking
@@ -213,7 +220,8 @@ class ParseResult:
 
 # --- @require_validated decorator ---
 
-def require_validated(func):
+
+def require_validated(func: _F) -> _F:
     """Decorator that asserts the first ParseResult argument is VALIDATED.
 
     Enforces taint-level contracts at function boundaries without
@@ -230,25 +238,33 @@ def require_validated(func):
     Raises ParseError (insufficient_taint) if the first positional argument
     whose type annotation is ParseResult has taint < VALIDATED.
     """
+
     @functools.wraps(func)
-    def _sync_wrapper(*args, **kwargs):
+    def _sync_wrapper(*args: Any, **kwargs: Any) -> Any:
         _enforce_validated(func, args, kwargs)
         return func(*args, **kwargs)
 
     @functools.wraps(func)
-    async def _async_wrapper(*args, **kwargs):
+    async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
         _enforce_validated(func, args, kwargs)
         return await func(*args, **kwargs)
 
-    return _async_wrapper if inspect.iscoroutinefunction(func) else _sync_wrapper
+    # Cast preserves the callable's own signature for type checkers
+    if inspect.iscoroutinefunction(func):
+        return _async_wrapper  # type: ignore[return-value]
+    return _sync_wrapper  # type: ignore[return-value]
 
 
-def _enforce_validated(func, args, kwargs):
+def _enforce_validated(
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
     """Check that any ParseResult arg/kwarg has VALIDATED taint."""
     params = list(inspect.signature(func).parameters.keys())
 
     # Check positional args
-    for i, (name, val) in enumerate(zip(params, args)):
+    for _i, (name, val) in enumerate(zip(params, args, strict=False)):
         if isinstance(val, ParseResult):
             if val.taint < TaintLevel.VALIDATED:
                 raise ParseError(
@@ -268,7 +284,6 @@ def _enforce_validated(func, args, kwargs):
                 )
 
 
-
 @dataclass(frozen=True)
 class InjectionPattern:
     """A named regex pattern for detecting prompt injection attempts.
@@ -278,6 +293,7 @@ class InjectionPattern:
         regex: Regular expression string (compiled internally).
         description: Human-readable description of what this pattern catches.
     """
+
     name: str
     regex: str
     description: str = ""
@@ -289,12 +305,34 @@ class InjectionPattern:
 
 # Built-in patterns — deliberately broad. False positives > false negatives.
 BUILTIN_PATTERNS: tuple[InjectionPattern, ...] = (
-    InjectionPattern("instruction_override", r"(?i)\b(?:ignore|disregard|forget)\b.{0,30}\b(?:previous|above|prior|all)\b.{0,30}\b(?:instructions?|rules?|context|prompts?)\b", "Attempts to override prior instructions"),
-    InjectionPattern("role_hijack", r"(?i)\b(?:you are|act as|pretend|roleplay|simulate)\b.{0,30}\b(?:a|an|the|now)\b", "Attempts to reassign the model's role"),
-    InjectionPattern("message_boundary", r"(?i)\b(?:system|assistant|user)\s*(?:prompt|message|:)", "Fake message boundary markers"),
-    InjectionPattern("chat_template", r"(?i)<\|(?:im_start|im_end|endoftext|system|user|assistant)\|>", "Chat template token injection"),
-    InjectionPattern("instruction_tag", r"(?i)\[(?:INST|SYS|/INST|/SYS)\]", "Instruction format tag injection"),
-    InjectionPattern("header_injection", r"(?i)#{1,3}\s*(?:system\s*(?:prompt|message|instruction)|new\s*(?:instruction|task|role))", "Markdown header-based injection"),
+    InjectionPattern(
+        "instruction_override",
+        r"(?i)\b(?:ignore|disregard|forget)\b.{0,30}\b(?:previous|above|prior|all)\b.{0,30}\b(?:instructions?|rules?|context|prompts?)\b",
+        "Attempts to override prior instructions",
+    ),
+    InjectionPattern(
+        "role_hijack",
+        r"(?i)\b(?:you are|act as|pretend|roleplay|simulate)\b.{0,30}\b(?:a|an|the|now)\b",
+        "Attempts to reassign the model's role",
+    ),
+    InjectionPattern(
+        "message_boundary",
+        r"(?i)\b(?:system|assistant|user)\s*(?:prompt|message|:)",
+        "Fake message boundary markers",
+    ),
+    InjectionPattern(
+        "chat_template",
+        r"(?i)<\|(?:im_start|im_end|endoftext|system|user|assistant)\|>",
+        "Chat template token injection",
+    ),
+    InjectionPattern(
+        "instruction_tag", r"(?i)\[(?:INST|SYS|/INST|/SYS)\]", "Instruction format tag injection"
+    ),
+    InjectionPattern(
+        "header_injection",
+        r"(?i)#{1,3}\s*(?:system\s*(?:prompt|message|instruction)|new\s*(?:instruction|task|role))",
+        "Markdown header-based injection",
+    ),
 )
 
 
@@ -320,7 +358,7 @@ class PatternRegistry:
             for p in BUILTIN_PATTERNS:
                 self._patterns[p.name] = p
 
-    def freeze(self) -> "PatternRegistry":
+    def freeze(self) -> PatternRegistry:
         """Lock this registry against further mutations. Called automatically
         when the registry is embedded in a ``StrictPolicy``.
 
@@ -367,6 +405,7 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (p.compiled, p.name) for p in BUILTIN_PATTERNS
 ]
 
+
 @dataclass(frozen=True)
 class StrictPolicy:
     """Strict structural policy enforcement for content ingestion.
@@ -374,18 +413,20 @@ class StrictPolicy:
     Forces security-first defaults: size/depth bounding, value rules,
     and optional pluggable semantic validators.
     """
+
     allowed_types: frozenset[ContentType]
     max_size_bytes: int
     max_depth: int
     schema: type[BaseModel] | None = None
-    mutation_mode: str = "IGNORE" # "IGNORE", "STRIP_AND_WARN", or "REJECT"
+    mutation_mode: str = "IGNORE"  # "IGNORE", "STRIP_AND_WARN", or "REJECT"
     value_rules: tuple[ValueRule, ...] = ()
     patterns: PatternRegistry | None = None
     semantic_validators: tuple[SemanticValidator, ...] = ()
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.max_size_bytes > 1024 * 1024:
             import logging
+
             logging.getLogger(__name__).warning(
                 "StrictPolicy allows payloads > 1MB. Ensure downstream LLM context can handle this."
             )
@@ -396,7 +437,7 @@ class StrictPolicy:
             self.patterns.freeze()
 
     @staticmethod
-    def compose(*policies: "StrictPolicy") -> "StrictPolicy":
+    def compose(*policies: StrictPolicy) -> StrictPolicy:
         if len(policies) < 2:
             raise ValueError("StrictPolicy.compose() requires at least 2 policies")
 
@@ -456,7 +497,9 @@ _MAX_SIZE_BYTES = 10_000_000  # 10MB
 _MAX_JSON_DEPTH = 50
 
 
-def _check_injection(text: str, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> list[str]:
+def _check_injection(
+    text: str, patterns: list[tuple[re.Pattern[str], str]] | None = None
+) -> list[str]:
     """Check text for prompt injection patterns. Returns matched pattern names."""
     pats = patterns if patterns is not None else _INJECTION_PATTERNS
     return [name for pattern, name in pats if pattern.search(text)]
@@ -474,7 +517,9 @@ def _check_json_depth(obj: Any, max_depth: int = _MAX_JSON_DEPTH, _current: int 
             _check_json_depth(item, max_depth, _current + 1)
 
 
-def _strip_injection_from_text(text: str, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> tuple[str, list[str]]:
+def _strip_injection_from_text(
+    text: str, patterns: list[tuple[re.Pattern[str], str]] | None = None
+) -> tuple[str, list[str]]:
     """Strip injection patterns from text. Returns (cleaned_text, stripped_pattern_names)."""
     pats = patterns if patterns is not None else _INJECTION_PATTERNS
     stripped = []
@@ -486,7 +531,9 @@ def _strip_injection_from_text(text: str, patterns: list[tuple[re.Pattern[str], 
     return cleaned, stripped
 
 
-def _scan_json_strings(obj: Any, warnings: list[str], patterns: list[tuple[re.Pattern[str], str]] | None = None) -> None:
+def _scan_json_strings(
+    obj: Any, warnings: list[str], patterns: list[tuple[re.Pattern[str], str]] | None = None
+) -> None:
     """Recursively scan JSON string values for injection patterns."""
     if isinstance(obj, str):
         for m in _check_injection(obj, patterns):
@@ -503,20 +550,36 @@ def _scan_json_strings(obj: Any, warnings: list[str], patterns: list[tuple[re.Pa
 
 # --- Content type parsers ---
 
-def _parse_json(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
+
+def _parse_json(
+    raw: str | bytes,
+    *,
+    strict: bool = True,
+    patterns: list[tuple[re.Pattern[str], str]] | None = None,
+    max_depth: int | None = None,
+) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
-        raise ParseError(f"Invalid JSON: {e}", content_type="json", violations=["invalid_json"]) from e
+        raise ParseError(
+            f"Invalid JSON: {e}", content_type="json", violations=["invalid_json"]
+        ) from e
     _check_json_depth(parsed, max_depth=max_depth if max_depth is not None else _MAX_JSON_DEPTH)
     warnings: list[str] = []
     _scan_json_strings(parsed, warnings, patterns)
-    return ParseResult(content=parsed, content_type=ContentType.JSON, sanitized=True, warnings=warnings)
+    return ParseResult(
+        content=parsed, content_type=ContentType.JSON, sanitized=True, warnings=warnings
+    )
 
 
-def _parse_text(raw: str | bytes, *, strip_injections: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
+def _parse_text(
+    raw: str | bytes,
+    *,
+    strip_injections: bool = True,
+    patterns: list[tuple[re.Pattern[str], str]] | None = None,
+) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
     warnings: list[str] = []
@@ -526,10 +589,21 @@ def _parse_text(raw: str | bytes, *, strip_injections: bool = True, patterns: li
         if matches:
             raw, stripped = _strip_injection_from_text(raw, patterns)
             warnings.extend(f"stripped:{s}" for s in stripped)
-    return ParseResult(content=raw, content_type=ContentType.TEXT, sanitized=True, warnings=warnings, stripped=stripped)
+    return ParseResult(
+        content=raw,
+        content_type=ContentType.TEXT,
+        sanitized=True,
+        warnings=warnings,
+        stripped=stripped,
+    )
 
 
-def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None) -> ParseResult:
+def _parse_markdown(
+    raw: str | bytes,
+    *,
+    strip_injections: bool = True,
+    patterns: list[tuple[re.Pattern[str], str]] | None = None,
+) -> ParseResult:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
     warnings: list[str] = []
@@ -547,10 +621,22 @@ def _parse_markdown(raw: str | bytes, *, strip_injections: bool = True, patterns
             raw, inj_stripped = _strip_injection_from_text(raw, patterns)
             stripped.extend(inj_stripped)
             warnings.extend(f"stripped:{s}" for s in inj_stripped)
-    return ParseResult(content=raw, content_type=ContentType.MARKDOWN, sanitized=True, warnings=warnings, stripped=stripped)
+    return ParseResult(
+        content=raw,
+        content_type=ContentType.MARKDOWN,
+        sanitized=True,
+        warnings=warnings,
+        stripped=stripped,
+    )
 
 
-def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
+def _parse_yaml(
+    raw: str | bytes,
+    *,
+    strict: bool = True,
+    patterns: list[tuple[re.Pattern[str], str]] | None = None,
+    max_depth: int | None = None,
+) -> ParseResult:
     """Parse YAML content with depth limits and injection scanning.
 
     Uses PyYAML safe_load (no arbitrary Python object construction).
@@ -558,12 +644,12 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
     """
     try:
         import yaml
-    except ImportError:
+    except ImportError as err:
         raise ParseError(
             "PyYAML is required for YAML parsing: pip install secure-ingest[yaml]",
             content_type="yaml",
             violations=["missing_dependency"],
-        )
+        ) from err
 
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
@@ -571,7 +657,9 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
     try:
         parsed = yaml.safe_load(raw)
     except yaml.YAMLError as e:
-        raise ParseError(f"Invalid YAML: {e}", content_type="yaml", violations=["invalid_yaml"]) from e
+        raise ParseError(
+            f"Invalid YAML: {e}", content_type="yaml", violations=["invalid_yaml"]
+        ) from e
 
     # YAML can parse scalars — ensure we got a container or wrap it
     if parsed is None:
@@ -582,16 +670,25 @@ def _parse_yaml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[r
 
     warnings: list[str] = []
     _scan_json_strings(parsed, warnings, patterns)
-    return ParseResult(content=parsed, content_type=ContentType.YAML, sanitized=True, warnings=warnings)
+    return ParseResult(
+        content=parsed, content_type=ContentType.YAML, sanitized=True, warnings=warnings
+    )
 
 
 _MAX_XML_SIZE = 10_000_000  # 10MB
 
 
-def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re.Pattern[str], str]] | None = None, max_depth: int | None = None) -> ParseResult:
+def _parse_xml(
+    raw: str | bytes,
+    *,
+    strict: bool = True,
+    patterns: list[tuple[re.Pattern[str], str]] | None = None,
+    max_depth: int | None = None,
+) -> ParseResult:
     """Parse XML content safely using defusedxml."""
-    import defusedxml.ElementTree as ET
     from xml.parsers.expat import ExpatError
+
+    import defusedxml.ElementTree as ET
 
     if isinstance(raw, bytes):
         raw_str = raw.decode("utf-8", errors="replace")
@@ -601,15 +698,19 @@ def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re
     try:
         root = ET.fromstring(raw_str)
     except ET.ParseError as e:
-        raise ParseError(f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]) from e
+        raise ParseError(
+            f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]
+        ) from e
     except ExpatError as e:
-        raise ParseError(f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]) from e
+        raise ParseError(
+            f"Invalid XML: {e}", content_type="xml", violations=["invalid_xml"]
+        ) from e
 
     warnings: list[str] = []
 
-    def _element_to_dict(elem: ET.Element) -> dict:
+    def _element_to_dict(elem: ET.Element) -> dict[str, Any]:
         """Convert XML element tree to dict, scanning for injections."""
-        result: dict = {}
+        result: dict[str, Any] = {}
         # Attributes
         if elem.attrib:
             for k, v in elem.attrib.items():
@@ -658,10 +759,13 @@ def _parse_xml(raw: str | bytes, *, strict: bool = True, patterns: list[tuple[re
         root_tag = root_tag.split("}", 1)[1]
     content = {root_tag: parsed}
 
-    return ParseResult(content=content, content_type=ContentType.XML, sanitized=True, warnings=warnings)
+    return ParseResult(
+        content=content, content_type=ContentType.XML, sanitized=True, warnings=warnings
+    )
 
 
 # --- Public API ---
+
 
 def parse(
     content: str | bytes,
@@ -676,13 +780,14 @@ def parse(
     policy: StrictPolicy | None = None,
     mutation_mode: str = "IGNORE",
 ) -> ParseResult:
-    """Parse and sanitize content for safe agent ingestion.
-    """
+    """Parse and sanitize content for safe agent ingestion."""
     if isinstance(content_type, str):
         try:
             content_type = ContentType(content_type.lower())
-        except ValueError:
-            raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
+        except ValueError as err:
+            raise ParseError(
+                f"Unsupported content type: {content_type}", violations=["unsupported_type"]
+            ) from err
 
     # --- StrictPolicy enforcement (structural, before any parsing) ---
     if policy is not None:
@@ -707,10 +812,10 @@ def parse(
     if policy is not None:
         if policy.patterns is not None:
             patterns = policy.patterns
-        
+
         mutation_mode = policy.mutation_mode
-        
-    check_injections = (mutation_mode != "IGNORE")
+
+    check_injections = mutation_mode != "IGNORE"
 
     # Resolve patterns to compiled list (None = use module defaults)
     compiled_patterns = patterns.get_patterns() if patterns is not None else None
@@ -720,7 +825,6 @@ def parse(
         chain_id = uuid.uuid4().hex[:12]
 
     # Override max depth if policy specifies it
-    original_max_depth = _MAX_JSON_DEPTH
     if policy is not None and policy.max_depth is not None:
         # Temporarily patch the module-level depth for this call
         _override_depth = policy.max_depth
@@ -728,24 +832,35 @@ def parse(
         _override_depth = None
 
     if content_type == ContentType.JSON:
-        result = _parse_json(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
+        result = _parse_json(
+            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
+        )
     elif content_type == ContentType.TEXT:
-        result = _parse_text(content, strip_injections=check_injections, patterns=compiled_patterns)
+        result = _parse_text(
+            content, strip_injections=check_injections, patterns=compiled_patterns
+        )
     elif content_type == ContentType.MARKDOWN:
-        result = _parse_markdown(content, strip_injections=check_injections, patterns=compiled_patterns)
+        result = _parse_markdown(
+            content, strip_injections=check_injections, patterns=compiled_patterns
+        )
     elif content_type == ContentType.YAML:
-        result = _parse_yaml(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
+        result = _parse_yaml(
+            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
+        )
     elif content_type == ContentType.XML:
-        result = _parse_xml(content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth)
+        result = _parse_xml(
+            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
+        )
     else:
-        raise ParseError(f"Unsupported content type: {content_type}", violations=["unsupported_type"])
-
+        raise ParseError(
+            f"Unsupported content type: {content_type}", violations=["unsupported_type"]
+        )
 
     if mutation_mode == "REJECT" and result.stripped:
         raise ParseError(
-            f"Content denied by StrictPolicy: injection pattern matched",
+            "Content denied by StrictPolicy: injection pattern matched",
             content_type=content_type.value,
-            violations=[f"policy_pattern:{pat}" for pat in result.stripped]
+            violations=[f"policy_pattern:{pat}" for pat in result.stripped],
         )
 
     # Determine taint level
@@ -754,7 +869,9 @@ def parse(
     # Schema validation (only for structured types that produce dicts)
     if schema is not None and isinstance(result.content, dict):
         try:
-            parsed_model = schema.model_validate(result.content, strict=schema.model_config.get("strict", False))
+            parsed_model = schema.model_validate(
+                result.content, strict=schema.model_config.get("strict", False)
+            )
             # Deep-freeze: recursively wrap all nested dicts in MappingProxyType
             # so no nested structure can be mutated after VALIDATED promotion.
             frozen_content = _deep_freeze(parsed_model.model_dump())
@@ -772,14 +889,14 @@ def parse(
             taint = TaintLevel.VALIDATED
         except ValidationError as e:
             raise SchemaValidationError(
-                pydantic_errors=e.errors(),
+                pydantic_errors=e.errors(),  # type: ignore[arg-type]
                 content_type=content_type.value,
             ) from e
 
     # Collect semantic validators: explicit arg + policy-level validators
     _all_semantic_validators: list[SemanticValidator] = []
     if semantic_scanner is not None:
-        _all_semantic_validators.append(semantic_scanner)  # backward compat
+        _all_semantic_validators.append(semantic_scanner)  # type: ignore[arg-type]
     if policy is not None:
         _all_semantic_validators.extend(policy.semantic_validators)
 
@@ -789,7 +906,9 @@ def parse(
             _text_repr = result.content
         else:
             _text_repr = json.dumps(
-                dict(result.content) if isinstance(result.content, types.MappingProxyType) else result.content,
+                dict(result.content)
+                if isinstance(result.content, types.MappingProxyType)
+                else result.content,
                 default=str,
             )
         new_warnings = list(result.warnings)
@@ -820,7 +939,7 @@ def parse(
             chain_id=result.chain_id,
             content_hash=result.content_hash,
         )
-        
+
     # ValueRule enforcement (after parsing structure)
     if policy is not None and policy.value_rules:
         violations = []
@@ -828,7 +947,7 @@ def parse(
         deny_rules = [r for r in policy.value_rules if r.action == "DENY"]
         allow_matched = {r.name: False for r in allow_rules}
 
-        def _scan_vals(obj, path="root"):
+        def _scan_vals(obj: Any, path: str = "root") -> None:
             if isinstance(obj, dict):
                 for k, v in obj.items():
                     _scan_vals(v, f"{path}.{k}")
@@ -869,12 +988,10 @@ def parse(
     )
 
 
-
-
-
 @dataclass
 class ParserConfig:
     """Configuration for the ContentParser."""
+
     strict: bool = True
     mutation_mode: str = "REJECT"
     policy: StrictPolicy | None = None
@@ -883,6 +1000,7 @@ class ParserConfig:
 @dataclass
 class ContentParserResult:
     """Result type expected by the ingestion pipeline."""
+
     success: bool
     parsed_content: dict[str, Any] | None = None
     error: str | None = None

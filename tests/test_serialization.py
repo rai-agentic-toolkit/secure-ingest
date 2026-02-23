@@ -1,20 +1,16 @@
 """Tests for policy serialization — dict, JSON, YAML round-tripping."""
 
 import json
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 import yaml
 
 from secure_ingest import (
-    
     ContentType,
-    ValueRule,
     InjectionPattern,
     PatternRegistry,
     StrictPolicy,
+    ValueRule,
 )
 from secure_ingest.serialization import (
     policy_from_dict,
@@ -25,8 +21,8 @@ from secure_ingest.serialization import (
     policy_to_yaml,
 )
 
-
 # --- policy_to_dict / policy_from_dict ---
+
 
 class TestPolicyToDict:
     def test_empty_policy(self):
@@ -48,8 +44,6 @@ class TestPolicyToDict:
     def test_max_size(self):
         d = policy_to_dict(make_policy(max_size_bytes=50000))
         assert d["max_size_bytes"] == 50000
-
-    
 
     def test_strip_injections_default_omitted(self):
         """strip_injections=True (default) is omitted from output."""
@@ -83,6 +77,7 @@ class TestPolicyToDict:
 class TestPolicyFromDict:
     def test_empty_dict(self):
         import pytest
+
         with pytest.raises(ValueError):
             policy_from_dict({})
 
@@ -110,20 +105,20 @@ class TestPolicyFromDict:
         policy = policy_from_dict({"allowed_types": ["text"], "max_size_bytes": 10000})
         assert policy.max_size_bytes == 10000
 
-    
-
     def test_strip_injections_false(self):
         policy = policy_from_dict({"allowed_types": ["text"], "mutation_mode": "IGNORE"})
         assert policy.mutation_mode == "IGNORE"
 
     def test_deny_rules(self):
-        policy = policy_from_dict({
-            "allowed_types": ["text"],
-            "value_rules": [
-                {"name": "r1", "pattern": "abc", "description": "test"},
-                {"name": "r2", "pattern": "def"},
-            ]
-        })
+        policy = policy_from_dict(
+            {
+                "allowed_types": ["text"],
+                "value_rules": [
+                    {"name": "r1", "pattern": "abc", "description": "test"},
+                    {"name": "r2", "pattern": "def"},
+                ],
+            }
+        )
         assert len(policy.value_rules) == 2
         assert policy.value_rules[0].name == "r1"
         assert policy.value_rules[0].description == "test"
@@ -139,14 +134,17 @@ class TestPolicyFromDict:
             policy_from_dict({"allowed_types": ["json"], "value_rules": "not a list"})
 
     def test_patterns_with_builtins(self):
-        policy = policy_from_dict({"allowed_types": ["text"],
-            "patterns": {
-                "include_builtins": True,
-                "custom": [
-                    {"name": "extra", "regex": "abc", "description": "test"},
-                ],
+        policy = policy_from_dict(
+            {
+                "allowed_types": ["text"],
+                "patterns": {
+                    "include_builtins": True,
+                    "custom": [
+                        {"name": "extra", "regex": "abc", "description": "test"},
+                    ],
+                },
             }
-        })
+        )
         assert policy.patterns is not None
         names = policy.patterns.names()
         assert "extra" in names
@@ -154,24 +152,30 @@ class TestPolicyFromDict:
         assert "instruction_override" in names
 
     def test_patterns_without_builtins(self):
-        policy = policy_from_dict({"allowed_types": ["text"],
-            "patterns": {
-                "include_builtins": False,
-                "custom": [
-                    {"name": "only_this", "regex": "xyz"},
-                ],
+        policy = policy_from_dict(
+            {
+                "allowed_types": ["text"],
+                "patterns": {
+                    "include_builtins": False,
+                    "custom": [
+                        {"name": "only_this", "regex": "xyz"},
+                    ],
+                },
             }
-        })
+        )
         assert policy.patterns is not None
         assert policy.patterns.names() == ["only_this"]
 
     def test_patterns_with_disabled(self):
-        policy = policy_from_dict({"allowed_types": ["text"],
-            "patterns": {
-                "include_builtins": True,
-                "disabled": ["role_hijack", "chat_template"],
+        policy = policy_from_dict(
+            {
+                "allowed_types": ["text"],
+                "patterns": {
+                    "include_builtins": True,
+                    "disabled": ["role_hijack", "chat_template"],
+                },
             }
-        })
+        )
         assert policy.patterns is not None
         names = policy.patterns.names()
         assert "role_hijack" not in names
@@ -180,9 +184,9 @@ class TestPolicyFromDict:
 
     def test_pattern_missing_fields(self):
         with pytest.raises(ValueError, match="pattern requires 'name' and 'regex'"):
-            policy_from_dict({"allowed_types": ["text"],
-                "patterns": {"custom": [{"name": "incomplete"}]}
-            })
+            policy_from_dict(
+                {"allowed_types": ["text"], "patterns": {"custom": [{"name": "incomplete"}]}}
+            )
 
 
 class TestRoundTrip:
@@ -195,9 +199,7 @@ class TestRoundTrip:
             max_depth=15,
             max_size_bytes=100000,
             strip_injections=False,
-            deny_rules=(
-                ValueRule("no_secrets", r"(?i)secret", "block secrets"),
-            ),
+            deny_rules=(ValueRule("no_secrets", r"(?i)secret", "block secrets"),),
             patterns=reg,
         )
         d = policy_to_dict(original)
@@ -206,7 +208,7 @@ class TestRoundTrip:
         assert restored.allowed_types == original.allowed_types
         assert restored.max_depth == original.max_depth
         assert restored.max_size_bytes == original.max_size_bytes
-        
+
         assert restored.mutation_mode == original.mutation_mode
         assert len(restored.value_rules) == len(original.value_rules)
         assert restored.value_rules[0].name == "no_secrets"
@@ -224,6 +226,7 @@ class TestRoundTrip:
 
 
 # --- JSON I/O ---
+
 
 class TestJsonIO:
     def test_to_json_string(self):
@@ -244,7 +247,6 @@ class TestJsonIO:
         s = '{"allowed_types": ["text"], "max_depth": 10, "allowed_types": ["json"]}'
         policy = policy_from_json(s)
         assert policy.max_depth == 10
-        
 
     def test_from_json_file(self, tmp_path):
         path = tmp_path / "policy.json"
@@ -268,6 +270,7 @@ class TestJsonIO:
 
 # --- YAML I/O ---
 
+
 class TestYamlIO:
     def test_to_yaml_string(self):
         policy = make_policy(max_depth=5)
@@ -287,7 +290,6 @@ class TestYamlIO:
         s = "allowed_types: [json, text]\nmax_depth: 10\nallowed_types: [json, text]\n"
         policy = policy_from_yaml(s)
         assert policy.max_depth == 10
-        
 
     def test_from_yaml_file(self, tmp_path):
         path = tmp_path / "policy.yaml"
@@ -340,7 +342,7 @@ allowed_types: [json, text]\npatterns:
         assert policy.allowed_types == frozenset({ContentType.JSON, ContentType.TEXT})
         assert policy.max_depth == 10
         assert policy.max_size_bytes == 50000
-        
+
         assert len(policy.value_rules) == 1
         assert policy.value_rules[0].name == "no_api_keys"
         assert policy.patterns is not None
@@ -351,6 +353,7 @@ allowed_types: [json, text]\npatterns:
 
 
 # --- Edge cases ---
+
 
 class TestEdgeCases:
     def test_empty_allowed_types_list(self):
@@ -374,9 +377,13 @@ class TestAllowRuleSerialization:
     """Allow rules round-trip through dict, JSON, YAML."""
 
     def test_to_dict_with_allow_rules(self):
-        policy = make_policy(allow_rules=(
-            ValueRule("has_id", r'"id"\s*:', action="ALLOW", description="Requires an id field"),
-        ))
+        policy = make_policy(
+            allow_rules=(
+                ValueRule(
+                    "has_id", r'"id"\s*:', action="ALLOW", description="Requires an id field"
+                ),
+            )
+        )
         d = policy_to_dict(policy)
         assert "value_rules" in d
         assert len(d["value_rules"]) == 1
@@ -387,8 +394,12 @@ class TestAllowRuleSerialization:
         d = {
             "allowed_types": ["json"],
             "value_rules": [
-                {"name": "has_ts", "pattern": r'"timestamp":', "description": "Must have timestamp"},
-            ]
+                {
+                    "name": "has_ts",
+                    "pattern": r'"timestamp":',
+                    "description": "Must have timestamp",
+                },
+            ],
         }
         policy = policy_from_dict(d)
         assert len(policy.value_rules) == 1
@@ -418,9 +429,11 @@ class TestAllowRuleSerialization:
         assert restored.value_rules[0].pattern == r"REQUIRED"
 
     def test_yaml_round_trip(self, tmp_path):
-        original = make_policy(allow_rules=(
-            ValueRule("has_data", r'"data":', action="ALLOW", description="Must contain data"),
-        ))
+        original = make_policy(
+            allow_rules=(
+                ValueRule("has_data", r'"data":', action="ALLOW", description="Must contain data"),
+            )
+        )
         path = tmp_path / "policy.yaml"
         policy_to_yaml(original, path)
         restored = policy_from_yaml(str(path))
@@ -443,27 +456,38 @@ class TestAllowRuleSerialization:
 
     def test_from_dict_missing_allow_rule_fields(self):
         with pytest.raises(ValueError, match="value_rule requires"):
-            policy_from_dict({"allowed_types": ["json"], "value_rules": [{"name": "missing_pattern"}]})
+            policy_from_dict(
+                {"allowed_types": ["json"], "value_rules": [{"name": "missing_pattern"}]}
+            )
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
     rules = []
-    if 'deny_rules' in kwargs:
-        rules.extend(kwargs.pop('deny_rules'))
-    if 'allow_rules' in kwargs:
-        rules.extend(kwargs.pop('allow_rules'))
+    if "deny_rules" in kwargs:
+        rules.extend(kwargs.pop("deny_rules"))
+    if "allow_rules" in kwargs:
+        rules.extend(kwargs.pop("allow_rules"))
     if rules:
-        kwargs['value_rules'] = tuple(rules)
+        kwargs["value_rules"] = tuple(rules)
     opts.update(kwargs)
     return StrictPolicy(**opts)

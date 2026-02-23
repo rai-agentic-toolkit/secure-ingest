@@ -13,6 +13,7 @@ Design principles:
 import warnings
 from dataclasses import dataclass
 from typing import Any
+
 from .parser import ContentType
 
 
@@ -33,7 +34,7 @@ class ValidatedPayload:
     content_type: ContentType
     chain_id: str
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         warnings.warn(
             "ValidatedPayload is deprecated and will be removed in v3.0. "
             "Use ParseResult.as_validated() instead: "

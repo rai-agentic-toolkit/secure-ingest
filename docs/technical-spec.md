@@ -18,7 +18,7 @@ minimum_requirements:
   network: "1 Gbps"
 
 recommended_production:
-  cpu: "16 vCPU"  
+  cpu: "16 vCPU"
   memory: "32 GB RAM"
   storage: "500 GB SSD"
   network: "10 Gbps"
@@ -473,7 +473,7 @@ class SchemaValidator:
             format_errors = self._validate_formats(content, content_type)
             result["errors"].extend(format_errors)
 
-            # 3. Business logic validation  
+            # 3. Business logic validation
             business_errors = self._validate_business_rules(content, content_type)
             result["errors"].extend(business_errors)
 
@@ -557,7 +557,7 @@ class SemanticAnomalyDetector:
         # 1. Pattern-based detection
         pattern_score = self._detect_injection_patterns(combined_text)
 
-        # 2. Instruction classification  
+        # 2. Instruction classification
         instruction_score = self._classify_instructions(combined_text)
 
         # 3. Embedding-based outlier detection

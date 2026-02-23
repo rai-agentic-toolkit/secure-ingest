@@ -8,22 +8,31 @@
 
 import asyncio
 import types
+
 import pytest
 from pydantic import BaseModel
 
 from secure_ingest import (
-    parse, ParseResult, ParseError, ContentType, TaintLevel,
-    StrictPolicy, SizeExceededError, DepthExceededError,
-    SchemaValidationError, SemanticRejectedError, PolicyTypeError,
+    ContentType,
+    DepthExceededError,
+    ParseError,
+    ParseResult,
+    PolicyTypeError,
+    SchemaValidationError,
+    SemanticRejectedError,
+    SizeExceededError,
+    StrictPolicy,
+    TaintLevel,
+    parse,
     require_validated,
 )
-from secure_ingest.async_parse import parse_async, AsyncSemanticValidator
-from secure_ingest.testing import make_validated_result, make_sanitized_result
-
+from secure_ingest.async_parse import parse_async
+from secure_ingest.testing import make_sanitized_result, make_validated_result
 
 # ---------------------------------------------------------------------------
 # Exception Hierarchy
 # ---------------------------------------------------------------------------
+
 
 class TestExceptionHierarchy:
     def test_all_are_parse_error_subclasses(self):
@@ -117,6 +126,7 @@ class TestExceptionHierarchy:
 # ParseResult.as_validated()
 # ---------------------------------------------------------------------------
 
+
 class TestAsValidated:
     def test_as_validated_on_validated_passes(self):
         class S(BaseModel):
@@ -136,6 +146,7 @@ class TestAsValidated:
 
     def test_as_validated_chains(self):
         """as_validated() is chainable from parse()."""
+
         class S(BaseModel):
             x: int
 
@@ -146,6 +157,7 @@ class TestAsValidated:
 # ---------------------------------------------------------------------------
 # @require_validated
 # ---------------------------------------------------------------------------
+
 
 class TestRequireValidated:
     def test_sync_function_passes_with_validated(self):
@@ -204,6 +216,7 @@ class TestRequireValidated:
 # secure_ingest.testing helpers
 # ---------------------------------------------------------------------------
 
+
 class TestTestingHelpers:
     def test_make_validated_result_taint(self):
         r = make_validated_result({"name": "Alice"})
@@ -254,6 +267,7 @@ class TestTestingHelpers:
 # parse_async()
 # ---------------------------------------------------------------------------
 
+
 class TestParseAsync:
     def _run(self, coro):
         return asyncio.run(coro)
@@ -294,17 +308,24 @@ class TestParseAsync:
 
     def test_parse_async_validators_run_concurrently(self):
         """Multiple validators all awaited — result reflects all rejections."""
+
         class Bad1:
-            async def validate(self, p: str) -> bool: return False
+            async def validate(self, p: str) -> bool:
+                return False
+
         class Bad2:
-            async def validate(self, p: str) -> bool: return False
+            async def validate(self, p: str) -> bool:
+                return False
+
         class Good:
-            async def validate(self, p: str) -> bool: return True
+            async def validate(self, p: str) -> bool:
+                return True
 
         with pytest.raises(SemanticRejectedError) as exc_info:
             self._run(
                 parse_async(
-                    "text", ContentType.TEXT,
+                    "text",
+                    ContentType.TEXT,
                     async_semantic_validators=(Bad1(), Good(), Bad2()),
                 )
             )

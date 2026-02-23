@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .pipeline import IngestionPipeline, IngestResult
@@ -148,8 +148,7 @@ class ReliabilityProfiler:
                 actions = [(e["stage"], e["action"]) for e in audit]
 
                 parsed_successfully = (
-                    "parsing" in stages and
-                    ("trust_boundary", "promoted_to_controlled") in actions
+                    "parsing" in stages and ("trust_boundary", "promoted_to_controlled") in actions
                 )
                 reached_anomaly = "anomaly_detection" in stages
 
@@ -182,7 +181,7 @@ class ReliabilityProfiler:
         # Strip audit trail if caller didn't request it
         if result is not None and not include_audit:
             result.audit_trail = None
-        return result  # type: ignore[return-value]
+        return result
 
     def reset(self) -> None:
         """Clear all accumulated metrics."""
@@ -199,9 +198,7 @@ class ReliabilityProfiler:
         predictability = self._score_predictability()
         safety = self._score_safety()
 
-        overall = (
-            consistency.score + robustness.score + predictability.score + safety.score
-        ) / 4
+        overall = (consistency.score + robustness.score + predictability.score + safety.score) / 4
 
         return ReliabilityReport(
             total_calls=len(self._calls),
@@ -221,9 +218,7 @@ class ReliabilityProfiler:
         # For hashes seen more than once, what fraction have consistent decisions?
         repeated = {h: ds for h, ds in self._hash_decisions.items() if len(ds) > 1}
         if repeated:
-            consistent_count = sum(
-                1 for ds in repeated.values() if len(set(ds)) == 1
-            )
+            consistent_count = sum(1 for ds in repeated.values() if len(set(ds)) == 1)
             decision_consistency_rate = consistent_count / len(repeated)
         else:
             decision_consistency_rate = 1.0  # no repeats = no inconsistency detected
@@ -279,7 +274,8 @@ class ReliabilityProfiler:
 
         # Metric 5: budget_utilization_ratio (inverted — lower utilization = more predictable headroom)
         budget_snapshots = [
-            c["budget_snapshot"] for c in self._calls
+            c["budget_snapshot"]
+            for c in self._calls
             if c.get("budget_snapshot") and c["budget_snapshot"].get("max_calls") is not None
         ]
         if budget_snapshots:
@@ -292,10 +288,7 @@ class ReliabilityProfiler:
             budget_score = 1.0  # no budget = no constraint to measure
 
         # Metric 6: stage_completion_rate (reached anomaly detection stage)
-        completed = [
-            c for c in self._calls
-            if c.get("reached_anomaly_stage", False)
-        ]
+        completed = [c for c in self._calls if c.get("reached_anomaly_stage", False)]
         stage_completion_rate = len(completed) / n if n > 0 else 1.0
 
         # Metric 7: decision_entropy (inverted — lower entropy = more predictable)
@@ -328,7 +321,7 @@ class ReliabilityProfiler:
         )
 
     def _score_safety(self) -> DimensionScore:
-        n = len(self._calls)
+        len(self._calls)
         with_results = [c for c in self._calls if "decision" in c]
         m = len(with_results)
 
@@ -388,27 +381,36 @@ class ReliabilityProfiler:
         return ReliabilityReport(
             total_calls=0,
             consistency=DimensionScore(
-                name="consistency", score=1.0,
-                metrics={"decision_consistency_rate": 1.0, "anomaly_score_stability": 1.0}
+                name="consistency",
+                score=1.0,
+                metrics={"decision_consistency_rate": 1.0, "anomaly_score_stability": 1.0},
             ),
             robustness=DimensionScore(
-                name="robustness", score=1.0,
-                metrics={"parse_success_rate": 1.0, "exception_free_rate": 1.0}
+                name="robustness",
+                score=1.0,
+                metrics={"parse_success_rate": 1.0, "exception_free_rate": 1.0},
             ),
             predictability=DimensionScore(
-                name="predictability", score=1.0,
+                name="predictability",
+                score=1.0,
                 metrics={
-                    "budget_utilization_ratio": 0.0, "budget_headroom_score": 1.0,
+                    "budget_utilization_ratio": 0.0,
+                    "budget_headroom_score": 1.0,
                     "stage_completion_rate": 1.0,
-                    "decision_entropy": 0.0, "decision_predictability_score": 1.0,
-                }
+                    "decision_entropy": 0.0,
+                    "decision_predictability_score": 1.0,
+                },
             ),
             safety=DimensionScore(
-                name="safety", score=1.0,
+                name="safety",
+                score=1.0,
                 metrics={
-                    "acceptance_rate": 1.0, "violation_rate": 0.0,
-                    "anomaly_rate": 0.0, "high_anomaly_rate": 0.0, "safety_score": 1.0,
-                }
+                    "acceptance_rate": 1.0,
+                    "violation_rate": 0.0,
+                    "anomaly_rate": 0.0,
+                    "high_anomaly_rate": 0.0,
+                    "safety_score": 1.0,
+                },
             ),
             overall_score=1.0,
         )

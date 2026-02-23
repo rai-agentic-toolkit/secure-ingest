@@ -24,7 +24,7 @@ Usage::
 
 from __future__ import annotations
 
-from typing import Any, List, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -57,13 +57,14 @@ class SemanticValidator(Protocol):
 # Backward-compatibility shim
 # ---------------------------------------------------------------------------
 
+
 class BaseSemanticScanner:
     """Deprecated. Subclass ``SemanticValidator`` and implement ``validate()``
     instead.  This shim is preserved so existing ``scan()``-based
     implementations continue to work via the legacy code path in ``parse()``.
     """
 
-    def scan(self, text: str) -> List[str]:  # pragma: no cover
+    def scan(self, text: str) -> list[str]:  # pragma: no cover
         """Return a list of violation names, or an empty list if safe.
 
         Deprecated: implement ``SemanticValidator.validate()`` instead.

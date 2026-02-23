@@ -46,11 +46,14 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from .parser import (
-    ParseResult, SemanticRejectedError,
-    ContentType, StrictPolicy, PatternRegistry,
-    BaseSemanticScanner,
+    ContentType,
+    ParseResult,
+    PatternRegistry,
+    SemanticRejectedError,
+    StrictPolicy,
     parse,  # sync parse handles all structural work
 )
+from .semantic import BaseSemanticScanner
 
 
 @runtime_checkable
@@ -140,7 +143,8 @@ async def parse_async(
             text_repr = result.content
         else:
             text_repr = json.dumps(
-                dict(result.content) if isinstance(result.content, types.MappingProxyType)
+                dict(result.content)
+                if isinstance(result.content, types.MappingProxyType)
                 else result.content,
                 default=str,
             )
@@ -153,7 +157,7 @@ async def parse_async(
 
         rejected_by = [
             type(validator).__name__
-            for validator, passed in zip(async_semantic_validators, outcomes)
+            for validator, passed in zip(async_semantic_validators, outcomes, strict=False)
             if not passed
         ]
         if rejected_by:

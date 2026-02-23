@@ -27,9 +27,8 @@ import string
 import unicodedata
 from base64 import b64decode
 from binascii import Error as BinasciiError
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
-
 
 # Weighted scoring defaults — expanded for new analyzers
 DEFAULT_WEIGHTS: dict[str, float] = {
@@ -62,8 +61,16 @@ class AnomalyResult:
 # Known prompt injection patterns with severity weights
 INJECTION_PATTERNS: list[dict[str, Any]] = [
     # Direct instruction override attempts
-    {"name": "ignore_previous", "regex": r"ignore\s+(all\s+)?previous\s+instructions?", "severity": 0.95},
-    {"name": "forget_instructions", "regex": r"forget\s+(all\s+)?(your\s+)?instructions?", "severity": 0.95},
+    {
+        "name": "ignore_previous",
+        "regex": r"ignore\s+(all\s+)?previous\s+instructions?",
+        "severity": 0.95,
+    },
+    {
+        "name": "forget_instructions",
+        "regex": r"forget\s+(all\s+)?(your\s+)?instructions?",
+        "severity": 0.95,
+    },
     {"name": "new_instructions", "regex": r"new\s+instructions?\s*:", "severity": 0.90},
     {"name": "system_prompt_override", "regex": r"system\s*:\s*you\s+are", "severity": 0.95},
     # Role manipulation
@@ -71,13 +78,37 @@ INJECTION_PATTERNS: list[dict[str, Any]] = [
     {"name": "act_as", "regex": r"act\s+as\s+(a|an|if)", "severity": 0.80},
     {"name": "you_are_now", "regex": r"you\s+are\s+now\s+a", "severity": 0.85},
     # Action execution attempts
-    {"name": "execute_command", "regex": r"(execute|run|eval)\s+(this|the\s+following)\s+command", "severity": 0.90},
-    {"name": "download_url", "regex": r"download\s+(from|file\s+from)\s+https?://", "severity": 0.90},
-    {"name": "call_api", "regex": r"(call|invoke|use)\s+(the\s+)?(api|tool|function)\s+", "severity": 0.80},
+    {
+        "name": "execute_command",
+        "regex": r"(execute|run|eval)\s+(this|the\s+following)\s+command",
+        "severity": 0.90,
+    },
+    {
+        "name": "download_url",
+        "regex": r"download\s+(from|file\s+from)\s+https?://",
+        "severity": 0.90,
+    },
+    {
+        "name": "call_api",
+        "regex": r"(call|invoke|use)\s+(the\s+)?(api|tool|function)\s+",
+        "severity": 0.80,
+    },
     # Data exfiltration attempts
-    {"name": "include_secrets", "regex": r"include\s+(all\s+)?(api\s+)?keys?\s+", "severity": 0.90},
-    {"name": "send_to_url", "regex": r"send\s+(it|this|data|results?)\s+to\s+https?://", "severity": 0.95},
-    {"name": "output_env", "regex": r"(output|print|include|show)\s+(the\s+)?environment\s+variables?", "severity": 0.90},
+    {
+        "name": "include_secrets",
+        "regex": r"include\s+(all\s+)?(api\s+)?keys?\s+",
+        "severity": 0.90,
+    },
+    {
+        "name": "send_to_url",
+        "regex": r"send\s+(it|this|data|results?)\s+to\s+https?://",
+        "severity": 0.95,
+    },
+    {
+        "name": "output_env",
+        "regex": r"(output|print|include|show)\s+(the\s+)?environment\s+variables?",
+        "severity": 0.90,
+    },
     # Delimiter/framing attacks
     {"name": "hidden_tag", "regex": r"\[HIDDEN\s*:", "severity": 0.95},
     {"name": "system_tag", "regex": r"<\s*system\s*>", "severity": 0.90},
@@ -241,7 +272,7 @@ class SemanticAnomalyDetector:
             weighted_avg,
             pattern_score * 0.85,
             instruction_score * 0.7,
-            unicode_score * 0.75,   # homoglyphs alone are highly suspicious
+            unicode_score * 0.75,  # homoglyphs alone are highly suspicious
             encoding_score * 0.70,  # embedded base64 alone is suspicious
         )
 
@@ -409,10 +440,17 @@ class SemanticAnomalyDetector:
         if invisible_count > 0:
             # Any invisible chars in user-submitted content is suspicious
             score += min(0.6, invisible_count * 0.15)
-            flags.append(f"invisible_chars:{invisible_count} ({', '.join(sorted(invisible_types)[:3])})")
+            flags.append(
+                f"invisible_chars:{invisible_count} ({', '.join(sorted(invisible_types)[:3])})"
+            )
 
         # Detect RTL override attacks specifically
-        rtl_overrides = sum(1 for ch in text if ch in ("\u202e", "\u202d", "\u200f", "\u200e", "\u2066", "\u2067", "\u2068", "\u2069"))
+        rtl_overrides = sum(
+            1
+            for ch in text
+            if ch
+            in ("\u202e", "\u202d", "\u200f", "\u200e", "\u2066", "\u2067", "\u2068", "\u2069")
+        )
         if rtl_overrides > 0:
             score += 0.5
             flags.append(f"rtl_override_chars:{rtl_overrides}")
@@ -531,6 +569,7 @@ class SemanticAnomalyDetector:
 
 # --- Utility functions ---
 
+
 def _shannon_entropy(text: str) -> float:
     """Calculate Shannon entropy of text in bits per character."""
     if not text:
@@ -626,7 +665,9 @@ def _is_likely_base64(candidate: str) -> bool:
         try:
             text = decoded.decode("utf-8", errors="strict")
             # If decoded text is mostly printable, this is likely intentional encoding
-            printable_ratio = sum(1 for c in text if c.isprintable() or c in "\n\r\t") / max(len(text), 1)
+            printable_ratio = sum(1 for c in text if c.isprintable() or c in "\n\r\t") / max(
+                len(text), 1
+            )
             return printable_ratio > 0.5
         except UnicodeDecodeError:
             # Binary data encoded as base64 — still suspicious in text content
@@ -659,7 +700,7 @@ def _trigram_repetition_ratio(text: str) -> float:
 
     trigrams: dict[str, int] = {}
     for i in range(len(text) - 2):
-        tri = text[i:i + 3]
+        tri = text[i : i + 3]
         trigrams[tri] = trigrams.get(tri, 0) + 1
 
     total = len(text) - 2
@@ -715,14 +756,14 @@ def _consecutive_repeat_ratio(text: str) -> float:
 
     for length in range(3, 9):
         for i in range(len(text) - length * 2 + 1):
-            chunk = text[i:i + length]
+            chunk = text[i : i + length]
             if chunk in checked:
                 continue
             checked.add(chunk)
             # Count consecutive repetitions
             pos = i
             repeats = 0
-            while pos + length <= len(text) and text[pos:pos + length] == chunk:
+            while pos + length <= len(text) and text[pos : pos + length] == chunk:
                 repeats += 1
                 pos += length
             if repeats >= 3:
