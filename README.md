@@ -245,6 +245,8 @@ All commands output structured JSON. Exit codes: 0 = accepted, 1 = rejected, 2 =
 - [FastAPI Integration](docs/integrations/fastapi.md) — Protect webhooks from zip bombs and memory allocation attacks before Pydantic parsing.
 - [LlamaIndex Integration](docs/integrations/llamaindex.md) — Secure vector embeddings by filtering out massive or anomalous documents from your `IngestionPipeline`.
 - [LangChain Integration](docs/integrations/langchain.md) — Wrap generic tools so untrusted API responses never leak into the LLM context.
+- [AutoGen Integration](docs/integrations/autogen.md) — Intercept inter-agent messages via `register_reply` before the receiving agent processes them.
+- [CrewAI Integration](docs/integrations/crewai.md) — Validate task outputs before they're handed off to the next agent in the crew.
 
 ## Security Model
 
