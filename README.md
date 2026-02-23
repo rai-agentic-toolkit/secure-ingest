@@ -1,9 +1,9 @@
 # secure-ingest
 
-Payload hygiene and content validation layer for AI agent ingestion.
-Prevents structural manipulation, protocol-level garbage, and basic anomalies
-at the architectural level — with taint tracking, policy enforcement, and structure safety
-for multi-agent flows.
+Strict payload hygiene and validation gateway for Python.
+
+Provides a structural validation boundary that enforces size, depth, encoding, and schema
+constraints on untrusted content before it reaches any business logic — AI-adjacent or otherwise.
 
 **Built on Pydantic and defusedxml. Pure Python 3.10+. 400+ tests.**
 
@@ -22,8 +22,8 @@ pip install secure-ingest[yaml]
 from secure_ingest import parse, ContentType
 from pydantic import BaseModel
 
-# Parse untrusted JSON — returns sanitized data with taint level
-result = parse('{"name": "Alice", "role": "admin"}', ContentType.JSON)
+# Parse untrusted JSON — returns validated data with taint level
+result = parse('{\"name\": \"Alice\", \"role\": \"admin\"}', ContentType.JSON)
 print(result.content)    # {'name': 'Alice', 'role': 'admin'}
 print(result.taint)      # TaintLevel.SANITIZED
 print(result.chain_id)   # 'a1b2c3d4e5f6' (correlation ID for tracking)
@@ -33,22 +33,24 @@ class UserSchema(BaseModel):
     name: str
     role: str
 
-result = parse('{"name": "Alice", "role": "admin"}', ContentType.JSON, schema=UserSchema)
+result = parse('{\"name\": \"Alice\", \"role\": \"admin\"}', ContentType.JSON, schema=UserSchema)
 print(result.taint)      # TaintLevel.VALIDATED
+print(type(result.content))  # <class 'mappingproxy'> — immutable after validation
 ```
 
 ## What It Does
 
-`secure-ingest` parses untrusted content (from other agents, APIs, user uploads) and
-returns sanitized, validated data. It enforces size/depth limits, handles safe deserialization,
-and optionally validates against Pydantic schemas.
+`secure-ingest` parses untrusted content (from external APIs, user uploads, or inter-service messages) and
+returns structurally validated data. It enforces size/depth limits, handles safe deserialization,
+optionally validates against Pydantic schemas, and freezes content once validated.
 
 **Design principles:**
 
 - **Stateless** — no side effects, no persistence, pure functions
-- **Sandboxed** — no code execution, no network, no file I/O
+- **Isolated** — no code execution, no network, no file I/O
 - **Deny-by-default** — only explicitly allowed content passes
-- **Strict Typing** — Uses Pydantic to tightly control data shapes
+- **Strict Typing** — uses Pydantic to tightly control data shapes
+- **Immutable on VALIDATED** — `result.content` becomes a read-only `MappingProxyType` after schema validation
 
 ## Content Types
 
@@ -67,12 +69,12 @@ Every `ParseResult` carries a taint level — the trust state of the content:
 | Level | Meaning |
 | ----- | ------- |
 | `UNTRUSTED` | Raw content |
-| `SANITIZED` | Parsed structure limits checked (default after `parse()`) |
-| `VALIDATED` | Passed strict `pydantic` schema validation (highest trust) |
+| `SANITIZED` | Parsed; structural limits checked (default after `parse()`) |
+| `VALIDATED` | Passed strict Pydantic schema validation; content is frozen (highest trust) |
 
 ### Type-level Enforcements
 
-Use type enforcements to explicitly require validated payloads in your application functions. This prevents LLM SDKs from accidentally receiving raw, unvalidated strings or untyped structures.
+Use type enforcements to explicitly require validated payloads in your application functions:
 
 ```python
 from secure_ingest import parse, ValidatedPayload, ContentType
@@ -85,24 +87,20 @@ class UserPrompt(BaseModel):
 
 def call_llm(payload: ValidatedPayload):
     # The type signature enforces that only validated payloads are accepted
-    # Extract the safe content to pass to the external SDK
     return openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": str(payload.content)}]
+        model=\"gpt-4\",
+        messages=[{\"role\": \"user\", \"content\": str(payload.content)}]
     )
 
-raw_input = '{"user_id": 123, "query": "hello"}'
-# 1. Parse and validate
+raw_input = '{\"user_id\": 123, \"query\": \"hello\"}'
 result = parse(raw_input, ContentType.JSON, schema=UserPrompt)
 
-# 2. Convert to ValidatedPayload
 safe_payload = ValidatedPayload(
     content=result.content,
     content_type=result.content_type,
     chain_id=result.chain_id
 )
 
-# 3. Call execution layer safely
 call_llm(safe_payload)
 ```
 
@@ -111,7 +109,7 @@ call_llm(safe_payload)
 Track where content came from and verify it hasn't been tampered with:
 
 ```python
-result = parse(content, ContentType.JSON, provenance="api.example.com/v1/data")
+result = parse(content, ContentType.JSON, provenance=\"api.example.com/v1/data\")
 print(result.provenance)     # 'api.example.com/v1/data'
 print(result.chain_id)       # auto-generated correlation ID
 print(result.content_hash)   # SHA-256 digest of parsed content
@@ -150,11 +148,39 @@ policy = StrictPolicy(
     allowed_types=frozenset({ContentType.JSON}),
     max_size_bytes=1024 * 1024,
     value_rules=(
-        ValueRule(name="no_ssn", pattern=r"\d{3}-\d{2}-\d{4}", action="DENY", description="Block SSNs"),
-        ValueRule(name="has_id", pattern=r"(?i)^id-\d+$", action="ALLOW", description="Must contain an ID"),
+        ValueRule(name=\"no_ssn\", pattern=r\"\\d{3}-\\d{2}-\\d{4}\", action=\"DENY\", description=\"Block SSNs\"),
+        ValueRule(name=\"has_id\", pattern=r\"(?i)^id-\\d+$\", action=\"ALLOW\", description=\"Must contain an ID\"),
     )
 )
 ```
+
+### Semantic Validation
+
+Plug in custom classifiers for intent-level checks. This is the correct layer for handling
+semantic threats — after structure is validated, before content is trusted:
+
+```python
+from secure_ingest import StrictPolicy, ContentType, SemanticValidator
+
+class MyClassifier:
+    \"\"\"Implement SemanticValidator.validate() to hook into the parse pipeline.\"\"\"
+    def validate(self, payload: str) -> bool:
+        # Return True = acceptable, False = reject with ParseError
+        return \"<your classifier logic here>\"
+
+policy = StrictPolicy(
+    allowed_types=frozenset({ContentType.TEXT}),
+    max_size_bytes=1024 * 100,
+    max_depth=10,
+    semantic_validators=(MyClassifier(),),
+)
+
+# ParseError raised if MyClassifier.validate() returns False
+result = parse(content, ContentType.TEXT, policy=policy)
+```
+
+`SemanticValidator` is a `typing.Protocol` — no base class required. Any class with a
+`validate(payload: str) -> bool` method satisfies it.
 
 ### Policy Composition
 
@@ -166,11 +192,8 @@ team_policy = StrictPolicy(allowed_types=frozenset({ContentType.JSON}), max_size
 
 combined = StrictPolicy.compose(org_policy, team_policy)
 # max_size_bytes=102400 (smaller wins), max_depth=5
-# allowed_types: intersection, value_rules: union
+# allowed_types: intersection, value_rules: union, semantic_validators: union
 ```
-
-Composition can only tighten constraints, never loosen them. Raises `ValueError`
-if the resulting policy would allow zero content types.
 
 ### Policy Serialization
 
@@ -179,21 +202,16 @@ Load policies from config files:
 ```python
 from secure_ingest import policy_from_yaml, policy_to_yaml
 
-# Load from YAML
-policy = policy_from_yaml("""
+policy = policy_from_yaml(\"\"\"
 allowed_types: [json, yaml]
 max_size_bytes: 102400
 max_depth: 5
 value_rules:
   - name: no_ssn
-    pattern: '\\d{3}-\\d{2}-\\d{4}'
+    pattern: '\\\\d{3}-\\\\d{2}-\\\\d{4}'
     action: DENY
     description: Block SSNs
-  - name: has_id
-    pattern: '^id-\\d+$'
-    action: ALLOW
-    description: Must contain ID field
-""")
+\"\"\")
 ```
 
 ## CLI
@@ -212,7 +230,7 @@ secure-ingest ingest --type security_finding --agent agent-001 content.json
 secure-ingest ingest --policy policy.yaml --type security_finding content.json
 
 # Read from stdin
-echo '{"data": "test"}' | secure-ingest ingest --type security_finding --stdin
+echo '{\"data\": \"test\"}' | secure-ingest ingest --type security_finding --stdin
 
 # List available schemas
 secure-ingest schemas
@@ -230,15 +248,16 @@ All commands output structured JSON. Exit codes: 0 = accepted, 1 = rejected, 2 =
 
 ## Security Model
 
-This acts as a structural boundary — content is parsed into constrained data before it ever reaches your agent's LLM context window. Policies are compiled into structure.
+This acts as a structural and schema boundary — content is parsed into constrained data before it
+ever reaches your application logic. Policies are compiled into structure. Validated content is
+frozen at the Python level (`MappingProxyType`).
 
 **What it protects against:**
 
 - XML External Entity (XXE) attacks via `defusedxml`
 - YAML deserialization attacks
 - ZIP bomb / deeply nested structure attacks
-- Taint confusion in multi-agent pipelines (via taint tracking and `ValidatedPayload`)
-- Content tampering (via SHA-256 integrity hashing)
+- Content tampered after validation (via SHA-256 integrity hashing + `MappingProxyType` freeze)
 - Policy drift (via structural enforcement with `StrictPolicy`)
 - Data exfiltration patterns (via deny rules)
 
@@ -246,7 +265,7 @@ This acts as a structural boundary — content is parsed into constrained data b
 
 - Runtime behavior monitoring
 - Network-level filtering
-- LLM output validation
+- Semantic/intent classification (that is your `SemanticValidator` to implement)
 
 ## License
 

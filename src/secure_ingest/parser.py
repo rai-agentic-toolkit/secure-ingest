@@ -1,10 +1,9 @@
-"""Core parser — stateless, sandboxed content ingestion for AI agents.
+"""Core parser — strict payload validation and structural hygiene layer for Python.
 
 Design principles:
 - Stateless: no side effects, no persistence, pure function
-- Sandboxed: no code execution, no network, no file I/O
+- Isolated: no code execution, no network, no file I/O
 - Deny-by-default: only explicitly allowed content passes
-- Prompt injection resistant: strips/escapes injection patterns
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import types
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -19,7 +19,7 @@ from typing import Any, List, Type
 from pydantic import BaseModel, ValidationError
 from .rules import ValueRule
 
-from .semantic import BaseSemanticScanner
+from .semantic import SemanticValidator, BaseSemanticScanner
 
 
 class ContentType(Enum):
@@ -187,8 +187,8 @@ _INJECTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 class StrictPolicy:
     """Strict structural policy enforcement for content ingestion.
 
-    Replaces legacy Policy. Forces security-first defaults like
-    no 10MB strings, required schemas, and explicit bounding of values.
+    Forces security-first defaults: size/depth bounding, value rules,
+    and optional pluggable semantic validators.
     """
     allowed_types: frozenset[ContentType]
     max_size_bytes: int
@@ -197,6 +197,7 @@ class StrictPolicy:
     mutation_mode: str = "REJECT" # "REJECT" or "STRIP_AND_WARN"
     value_rules: tuple[ValueRule, ...] = ()
     patterns: PatternRegistry | None = None
+    semantic_validators: tuple[SemanticValidator, ...] = ()
 
     def __post_init__(self):
         if self.max_size_bytes > 1024 * 1024:
@@ -241,6 +242,15 @@ class StrictPolicy:
                 for pat in reg.get_all():
                     merged_patterns.add(pat)
 
+        # Merge semantic validators (union — all validators from all policies)
+        seen_validators: list[SemanticValidator] = []
+        seen_validator_ids: set[int] = set()
+        for p in policies:
+            for v in p.semantic_validators:
+                if id(v) not in seen_validator_ids:
+                    seen_validators.append(v)
+                    seen_validator_ids.add(id(v))
+
         return StrictPolicy(
             allowed_types=frozenset(allowed_types),
             max_size_bytes=max_size_bytes,
@@ -249,6 +259,7 @@ class StrictPolicy:
             mutation_mode=mutation_mode,
             value_rules=value_rules,
             patterns=merged_patterns,
+            semantic_validators=tuple(seen_validators),
         )
 
 
@@ -565,8 +576,10 @@ def parse(
     if schema is not None and isinstance(result.content, dict):
         try:
             parsed_model = schema.model_validate(result.content, strict=schema.model_config.get("strict", False))
+            # Freeze the validated content dict so callers cannot mutate it after trust promotion
+            frozen_content = types.MappingProxyType(parsed_model.model_dump())
             result = ParseResult(
-                content=parsed_model.model_dump(),
+                content=frozen_content,
                 content_type=result.content_type,
                 sanitized=result.sanitized,
                 warnings=result.warnings,
@@ -584,21 +597,54 @@ def parse(
                 violations=[f"schema_violation:{err['loc'][0]}_{err['msg']}" for err in e.errors()],
             )
 
+    # Collect semantic validators: explicit arg + policy-level validators
+    _all_semantic_validators: list[SemanticValidator] = []
     if semantic_scanner is not None:
+        _all_semantic_validators.append(semantic_scanner)  # backward compat
+    if policy is not None:
+        _all_semantic_validators.extend(policy.semantic_validators)
+
+    if _all_semantic_validators:
+        # Build a text representation to validate against
         if isinstance(result.content, str):
-            semantic_violations = semantic_scanner.scan(result.content)
-            if semantic_violations:
-                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
-                result.stripped.extend(semantic_violations)  # Reusing stripped to list things that caused issues
-        elif isinstance(result.content, dict) or isinstance(result.content, list):
-            # For structured data, we would ideally extract all strings and scan them.
-            # A simplified approach for now is scanning stringified representation.
-            import json
-            text_repr = json.dumps(result.content, default=str)
-            semantic_violations = semantic_scanner.scan(text_repr)
-            if semantic_violations:
-                result.warnings.extend([f"semantic_violation:{v}" for v in semantic_violations])
-                result.stripped.extend(semantic_violations)
+            _text_repr = result.content
+        else:
+            _text_repr = json.dumps(
+                dict(result.content) if isinstance(result.content, types.MappingProxyType) else result.content,
+                default=str,
+            )
+        new_warnings = list(result.warnings)
+        new_stripped = list(result.stripped)
+        rejected_by: list[str] = []
+        for validator in _all_semantic_validators:
+            # Support both old scan() interface and new validate() Protocol
+            if hasattr(validator, "validate"):
+                passed = validator.validate(_text_repr)
+                if not passed:
+                    rejected_by.append(type(validator).__name__)
+            elif hasattr(validator, "scan"):
+                # Legacy BaseSemanticScanner with scan() returning violation list
+                violations = validator.scan(_text_repr)
+                if violations:
+                    new_warnings.extend([f"semantic_violation:{v}" for v in violations])
+                    new_stripped.extend(violations)
+        if rejected_by:
+            raise ParseError(
+                f"Content rejected by semantic validator(s): {', '.join(rejected_by)}",
+                content_type=content_type.value,
+                violations=[f"semantic_validator_rejected:{name}" for name in rejected_by],
+            )
+        result = ParseResult(
+            content=result.content,
+            content_type=result.content_type,
+            sanitized=result.sanitized,
+            warnings=new_warnings,
+            stripped=new_stripped,
+            taint=result.taint,
+            provenance=result.provenance,
+            chain_id=result.chain_id,
+            content_hash=result.content_hash,
+        )
         
     # ValueRule enforcement (after parsing structure)
     if policy is not None and policy.value_rules:

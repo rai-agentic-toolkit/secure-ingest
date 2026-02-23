@@ -245,6 +245,29 @@ class TestParseResult:
         with pytest.raises(AttributeError):
             result.content = "modified"
 
+    def test_validated_content_is_mapping_proxy(self):
+        import types
+        from pydantic import BaseModel
+
+        class UserSchema(BaseModel):
+            name: str
+            role: str
+
+        result = parse('{"name": "Alice", "role": "admin"}', ContentType.JSON, schema=UserSchema)
+        assert result.taint.value == "validated"
+        assert isinstance(result.content, types.MappingProxyType)
+
+    def test_validated_content_is_read_only(self):
+        import types
+        from pydantic import BaseModel
+
+        class UserSchema(BaseModel):
+            name: str
+
+        result = parse('{"name": "Bob"}', ContentType.JSON, schema=UserSchema)
+        with pytest.raises(TypeError):
+            result.content["name"] = "hacked"  # type: ignore[index]
+
 
 class TestRoleHijack:
     def test_role_hijack_detected(self):
