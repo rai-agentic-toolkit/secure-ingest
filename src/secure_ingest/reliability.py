@@ -321,7 +321,6 @@ class ReliabilityProfiler:
         )
 
     def _score_safety(self) -> DimensionScore:
-        len(self._calls)
         with_results = [c for c in self._calls if "decision" in c]
         m = len(with_results)
 

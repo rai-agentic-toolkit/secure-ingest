@@ -157,26 +157,29 @@ class IngestionPipeline:
 
         parsed_content = envelope.parsed_content
         if not isinstance(parsed_content, dict):
-            parsed_content = {}
-
-        validation = self._validator.validate(
-            parsed_content,
-            content_type,
-        )
-        envelope.audit(
-            "validation",
-            "completed",
-            valid=validation.valid,
-            error_count=len(validation.errors),
-        )
-
-        if not validation.valid:
-            envelope.validation_errors = validation.errors
-            self._trust.reject(
-                envelope,
-                f"validation_failed: {len(validation.errors)} errors",
+            # Non-dict content (text, XML, etc.) has already been structurally
+            # validated by the parser. Schema validation is JSON-specific; skip it
+            # here rather than silently passing {} which would generate spurious errors.
+            envelope.audit("validation", "skipped", reason="non-dict content")
+        else:
+            validation = self._validator.validate(
+                parsed_content,
+                content_type,
             )
-            return self._build_result(envelope, include_audit)
+            envelope.audit(
+                "validation",
+                "completed",
+                valid=validation.valid,
+                error_count=len(validation.errors),
+            )
+
+            if not validation.valid:
+                envelope.validation_errors = validation.errors
+                self._trust.reject(
+                    envelope,
+                    f"validation_failed: {len(validation.errors)} errors",
+                )
+                return self._build_result(envelope, include_audit)
 
         # Stage 4: Semantic anomaly detection
         anomaly = self._anomaly.analyze(envelope.parsed_content)  # type: ignore[arg-type]
