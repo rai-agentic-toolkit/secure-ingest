@@ -5,7 +5,9 @@ Strict payload hygiene and validation gateway for Python.
 Provides a structural validation boundary that enforces size, depth, encoding, and schema
 constraints on untrusted content before it reaches any business logic — AI-adjacent or otherwise.
 
-**Built on Pydantic and defusedxml. Pure Python 3.10+. 400+ tests.**
+**Built on Pydantic and defusedxml. Pure Python 3.10+. 458 tests.**
+
+> See [ROADMAP.md](ROADMAP.md) for planned improvements and known architectural gaps.
 
 ## Install
 
