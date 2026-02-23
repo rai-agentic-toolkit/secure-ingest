@@ -4,13 +4,12 @@ Drop-in complement to ``parse()`` for async runtimes (FastAPI, aiohttp,
 LangChain async chains, AutoGen async agents).
 
 The key addition over the sync interface is ``AsyncSemanticValidator`` — a
-Protocol whose ``validate()`` coroutine can await external calls (classifier
-APIs, vector DB lookups, etc.) without blocking the event loop.
+``typing.Protocol`` whose ``validate()`` coroutine can await external calls
+(classifier APIs, vector DB lookups, etc.) without blocking the event loop.
 
 Usage::
 
-    from secure_ingest.async_parse import parse_async, AsyncSemanticValidator
-    from secure_ingest import ContentType, StrictPolicy
+    from secure_ingest import parse_async, AsyncSemanticValidator, ContentType, StrictPolicy
 
     class MyClassifier:
         async def validate(self, payload: str) -> bool:
@@ -42,27 +41,31 @@ from __future__ import annotations
 import asyncio
 import json
 import types
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
 from .parser import (
-    ParseResult, ParseError, SemanticRejectedError,
-    ContentType, TaintLevel, StrictPolicy, PatternRegistry,
-    BaseSemanticScanner, SemanticValidator,
+    ParseResult, SemanticRejectedError,
+    ContentType, StrictPolicy, PatternRegistry,
+    BaseSemanticScanner,
     parse,  # sync parse handles all structural work
 )
-from .semantic import SemanticValidator
 
 
-class AsyncSemanticValidator:
+@runtime_checkable
+class AsyncSemanticValidator(Protocol):
     """Protocol for async semantic validators.
 
-    Implement this if your classifier needs to make network calls —
-    an HTTP request to an external API, a vector DB lookup, etc.
+    Any class with ``async def validate(self, payload: Any) -> bool`` satisfies
+    this protocol — no inheritance required.
 
-    ``parse_async()`` will ``await`` each validator's ``validate()``
-    coroutine after structural parsing completes.
+    Implement this when your classifier needs to make network calls: an HTTP
+    request to an external API, a vector DB lookup, a Redis cache check, etc.
+
+    ``parse_async()`` will ``await`` each validator's ``validate()`` coroutine
+    after structural parsing completes, running all of them concurrently via
+    ``asyncio.gather()``.
     """
 
     async def validate(self, payload: Any) -> bool:
@@ -87,8 +90,8 @@ async def parse_async(
     """Async version of ``parse()`` — awaits async SemanticValidator instances.
 
     All structural validation (size, depth, schema) runs synchronously via
-    the standard ``parse()`` pipeline. Only the async semantic validators are
-    awaited, keeping the sync path free of event-loop concerns.
+    the standard ``parse()`` pipeline in a thread executor — zero event loop
+    blocking. Only the async semantic validators are awaited.
 
     Args:
         content: Raw content to parse.
@@ -113,7 +116,8 @@ async def parse_async(
     """
     # Run all synchronous parsing in a thread so we don't block the event loop
     # on regex work, defusedxml parsing, or schema validation.
-    loop = asyncio.get_event_loop()
+    # Use get_running_loop() — the correct API inside a running coroutine.
+    loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
         None,
         lambda: parse(
@@ -141,7 +145,7 @@ async def parse_async(
                 default=str,
             )
 
-        # Await all validators concurrently
+        # Await all validators concurrently — one network call doesn't block others
         outcomes = await asyncio.gather(
             *[v.validate(text_repr) for v in async_semantic_validators],
             return_exceptions=False,

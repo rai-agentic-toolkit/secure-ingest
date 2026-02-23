@@ -248,6 +248,85 @@ All commands output structured JSON. Exit codes: 0 = accepted, 1 = rejected, 2 =
 - [AutoGen Integration](docs/integrations/autogen.md) — Intercept inter-agent messages via `register_reply` before the receiving agent processes them.
 - [CrewAI Integration](docs/integrations/crewai.md) — Validate task outputs before they're handed off to the next agent in the crew.
 
+## Async Support
+
+For FastAPI, LangChain async chains, and AutoGen — use `parse_async()`:
+
+```python
+from secure_ingest import parse_async, AsyncSemanticValidator, ContentType
+
+class MyClassifier:
+    async def validate(self, payload: str) -> bool:
+        result = await my_remote_classifier.score(payload)
+        return result.score < 0.8  # True = accept
+
+@app.post("/ingest")
+async def ingest(request: Request):
+    raw = await request.body()
+    result = await parse_async(
+        raw, ContentType.JSON,
+        schema=MySchema,
+        async_semantic_validators=(MyClassifier(),),
+    )
+    return result.as_validated().content
+```
+
+`parse_async()` runs all synchronous validation (parsing, size/depth limits, schema) in a thread executor and awaits async validators concurrently — zero event loop blocking.
+
+## Testing Utilities
+
+Use `secure_ingest.testing` to construct `ParseResult` fixtures in tests without running the full parser. This decouples downstream unit tests from parser internals:
+
+```python
+from secure_ingest.testing import make_validated_result, make_sanitized_result
+from secure_ingest import require_validated, ParseError
+import pytest
+
+def test_my_handler_accepts_validated():
+    result = make_validated_result({"user_id": 1, "query": "hello"})
+    assert my_handler(result) == "expected output"
+
+def test_my_handler_rejects_sanitized():
+    result = make_sanitized_result("raw untrusted text")
+    with pytest.raises(ParseError):
+        my_handler(result)  # decorated with @require_validated
+```
+
+`make_validated_result()` deep-freezes content (`MappingProxyType` for dicts, `tuple` for lists) to match real VALIDATED results. `make_sanitized_result()` produces SANITIZED taint for testing rejection paths.
+
+## Advanced Modules
+
+For production multi-agent services needing loop detection, structured workflow enforcement, and observability, see the [Advanced Modules guide](docs/advanced-modules.md):
+
+- **`IngestionPipeline`** — full stage-by-stage pipeline with audit trail
+- **`RequestBudget`** — hard call ceilings + cycle detection (guards against agentic overthinking loops)
+- **`StructureMonitor` / `ToolGraph`** — enforce tool calls happen in valid topological order
+- **`ReliabilityProfiler`** — tracks 12 metrics across consistency, robustness, predictability, and safety
+
+## Error Handling
+
+All failures raise `ParseError` subclasses, so you can be as precise or coarse as you need:
+
+```python
+from secure_ingest import (
+    ParseError,           # catch-all
+    SizeExceededError,    # e.limit, e.actual
+    DepthExceededError,   # e.max_depth
+    SchemaValidationError, # e.pydantic_errors
+    SemanticRejectedError, # e.rejected_by
+    PolicyTypeError,       # e.attempted, e.allowed
+)
+
+try:
+    result = parse(raw, ContentType.JSON, policy=policy, schema=MySchema)
+except SizeExceededError:
+    return Response(status_code=413)
+except SchemaValidationError as e:
+    return Response(status_code=422, content={"errors": e.pydantic_errors})
+except ParseError:
+    return Response(status_code=400)
+```
+
 ## Security Model
 
 This acts as a structural and schema boundary — content is parsed into constrained data before it
@@ -268,6 +347,12 @@ frozen at the Python level (`MappingProxyType`).
 - Runtime behavior monitoring
 - Network-level filtering
 - Semantic/intent classification (that is your `SemanticValidator` to implement)
+
+**Known limitations:**
+
+- `SchemaValidationError.violations` truncates nested Pydantic field paths to the first segment. The full path is available via `e.pydantic_errors` (list of raw Pydantic error dicts).
+- `SemanticAnomalyDetector` inside `IngestionPipeline` has configurable thresholds not yet exposed via `StrictPolicy`. Use `ReliabilityProfiler` to observe its behavior.
+- `_compute_content_hash()` hashes the parsed representation, not the raw wire bytes. Two JSON strings that parse to identical dicts produce the same hash (semantic, not wire, identity).
 
 ## License
 

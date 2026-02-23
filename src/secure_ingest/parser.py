@@ -8,7 +8,9 @@ Design principles:
 
 from __future__ import annotations
 
+import functools
 import hashlib
+import inspect
 import json
 import re
 import types
@@ -211,9 +213,6 @@ class ParseResult:
 
 # --- @require_validated decorator ---
 
-import functools
-import inspect
-
 def require_validated(func):
     """Decorator that asserts the first ParseResult argument is VALIDATED.
 
@@ -246,7 +245,6 @@ def require_validated(func):
 
 def _enforce_validated(func, args, kwargs):
     """Check that any ParseResult arg/kwarg has VALIDATED taint."""
-    hints = func.__annotations__
     params = list(inspect.signature(func).parameters.keys())
 
     # Check positional args

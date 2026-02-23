@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "secure-ingest"
-version = "1.0.0"
+version = "2.1.0"
 description = "Payload hygiene and content validation layer for AI agent ingestion"
 readme = "README.md"
 license = "MIT"
@@ -13,12 +13,13 @@ authors = [
     {name = "Jesse Castro & Raven", email = "jesse@ravenagent.dev"},
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries",
 ]
