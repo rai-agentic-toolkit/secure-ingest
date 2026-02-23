@@ -10,7 +10,6 @@ Content that fails ANY layer is rejected.
 
 from __future__ import annotations
 
-import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,7 +36,7 @@ class SchemaValidator:
     at any layer means the content is rejected.
     """
 
-    def __init__(self, schemas: dict[str, dict] | None = None) -> None:
+    def __init__(self, schemas: dict[str, dict[str, Any]] | None = None) -> None:
         self._schemas = schemas or SCHEMA_REGISTRY
 
     def validate(self, content: dict[str, Any], content_type: str) -> ValidationResult:
@@ -74,7 +73,7 @@ class SchemaValidator:
     def supported_types(self) -> list[str]:
         return list(self._schemas.keys())
 
-    def _validate_structural(self, content: dict[str, Any], schema: dict) -> list[str]:
+    def _validate_structural(self, content: dict[str, Any], schema: dict[str, Any]) -> list[str]:
         """Layer 1: JSON Schema structural validation."""
         errors: list[str] = []
         validator = jsonschema.Draft202012Validator(schema)
@@ -132,9 +131,7 @@ class SchemaValidator:
 
         return errors
 
-    def _validate_business_rules(
-        self, content: dict[str, Any], content_type: str
-    ) -> list[str]:
+    def _validate_business_rules(self, content: dict[str, Any], content_type: str) -> list[str]:
         """Layer 3: Domain-specific business logic validation."""
         errors: list[str] = []
 
@@ -148,9 +145,7 @@ class SchemaValidator:
         for key, value in _iter_strings(content):
             for line in value.split("\n"):
                 if len(line) > 500 and " " not in line:
-                    errors.append(
-                        f"business: suspicious long unbroken string in field {key}"
-                    )
+                    errors.append(f"business: suspicious long unbroken string in field {key}")
 
         return errors
 

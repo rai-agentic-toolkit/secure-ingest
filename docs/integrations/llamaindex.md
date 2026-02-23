@@ -23,10 +23,10 @@ document_defense_policy = StrictPolicy(
 
 class SecureDocumentScanner:
     """A LlamaIndex custom Transformation node that drops invalid documents."""
-    
+
     def __call__(self, documents: list[Document], **kwargs) -> list[Document]:
         validated_docs = []
-        
+
         for doc in documents:
             try:
                 # 1. Parse and validate the document text
@@ -36,16 +36,16 @@ class SecureDocumentScanner:
                     policy=document_defense_policy,
                     provenance=doc.metadata.get("source", "unknown_document")
                 )
-                
+
                 # 2. Update the document with safely structured and limited output
                 doc.text = result.content
                 validated_docs.append(doc)
-                
+
             except ParseError as e:
                 # 3. Message is unsafe or too large. Drop the document from the pipeline.
                 print(f"SECURITY WARNING: Dropped document [{doc.id_}] - {str(e)}")
                 # We simply do not append to 'validated_docs', removing it from the ingestion loop.
-                
+
         return validated_docs
 
 # -----------------

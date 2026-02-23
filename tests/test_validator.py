@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from secure_ingest.validator import SchemaValidator, ValidationResult
+from secure_ingest.validator import SchemaValidator
 
 
 @pytest.fixture
@@ -138,7 +138,10 @@ class TestFormatValidation:
 
 class TestBusinessRules:
     def test_null_byte_in_field(self, validator):
-        finding = {**VALID_SECURITY_FINDING, "description": "Has a null\x00byte in here for injection"}
+        finding = {
+            **VALID_SECURITY_FINDING,
+            "description": "Has a null\x00byte in here for injection",
+        }
         result = validator.validate(finding, "security_finding")
         assert result.valid is False
         assert any("null byte" in e for e in result.errors)
@@ -165,40 +168,58 @@ class TestBusinessRules:
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)

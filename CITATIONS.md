@@ -120,7 +120,7 @@ URL: https://atlas.mitre.org/techniques/AML.T0051.001
 ### Open Source Inspirations
 
 - **LangChain**: Agent framework architecture patterns
-- **AutoGPT**: Autonomous agent design principles  
+- **AutoGPT**: Autonomous agent design principles
 - **Haystack**: Document processing and retrieval patterns
 - **MLflow**: ML model deployment and monitoring approaches
 

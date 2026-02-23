@@ -37,11 +37,31 @@ from .parser import (
 )
 from .rules import ValueRule
 
+# Current schema version written into all serialized policies.
+# Bump this when the format changes in a breaking way.
+_SCHEMA_VERSION = 2
+
+
+class PolicyVersionError(ValueError):
+    """Raised when a serialized policy has an unknown or unsupported schema version."""
+
+    def __init__(self, found: int, supported: int):
+        self.found = found
+        self.supported = supported
+        super().__init__(
+            f"Unsupported policy schema_version {found!r} "
+            f"(this library supports up to version {supported}). "
+            "Upgrade secure-ingest or regenerate the policy file."
+        )
+
 
 def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
     """Serialize a StrictPolicy to a plain dict (suitable for JSON/YAML).
+
+    The output always includes ``schema_version`` so that future library
+    versions can detect and migrate stale policy files.
     """
-    d: dict[str, Any] = {}
+    d: dict[str, Any] = {"schema_version": _SCHEMA_VERSION}
 
     if policy.allowed_types is not None:
         d["allowed_types"] = sorted(t.value for t in policy.allowed_types)
@@ -51,9 +71,7 @@ def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
     d["mutation_mode"] = policy.mutation_mode
 
     if policy.value_rules:
-        d["value_rules"] = [
-            _value_rule_to_dict(rule) for rule in policy.value_rules
-        ]
+        d["value_rules"] = [_value_rule_to_dict(rule) for rule in policy.value_rules]
 
     if policy.patterns is not None:
         d["patterns"] = _registry_to_dict(policy.patterns)
@@ -63,7 +81,16 @@ def policy_to_dict(policy: StrictPolicy) -> dict[str, Any]:
 
 def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     """Deserialize a StrictPolicy from a plain dict.
+
+    Validates ``schema_version`` if present. Version 1 policies (no version
+    field) are accepted with a ``mutation_mode`` migration: the old default
+    was ``REJECT``; if a v1 file omits ``mutation_mode`` we preserve that
+    intent. Version 2+ files use ``IGNORE`` as the default.
     """
+    schema_version = int(d.get("schema_version", 1))
+    if schema_version > _SCHEMA_VERSION:
+        raise PolicyVersionError(found=schema_version, supported=_SCHEMA_VERSION)
+
     # allowed_types
     if "allowed_types" not in d:
         raise ValueError("allowed_types is required for StrictPolicy")
@@ -74,9 +101,9 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     for t in raw_types:
         try:
             types.add(ContentType(t.lower()))
-        except ValueError:
+        except ValueError as err:
             valid = ", ".join(ct.value for ct in ContentType)
-            raise ValueError(f"Unknown content type '{t}' (valid: {valid})")
+            raise ValueError(f"Unknown content type '{t}' (valid: {valid})") from err
     allowed_types = frozenset(types)
 
     max_depth = int(d["max_depth"]) if "max_depth" in d else 50
@@ -85,11 +112,15 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
     if "mutation_mode" in d:
         mutation_mode = str(d["mutation_mode"])
     elif "strip_injections" in d:
-        # Backward compatibility: strip_injections=True meant we removed them. 
-        # In V2, we REJECT them instead of silently stripping, for maximum strictness.
+        # Backward compatibility with v1 strip_injections boolean.
         mutation_mode = "REJECT" if d["strip_injections"] else "IGNORE"
-    else:
+    elif schema_version < 2:
+        # v1 policy with no mutation_mode: preserve old REJECT default
+        # to avoid silently changing behaviour on upgrade.
         mutation_mode = "REJECT"
+    else:
+        # v2+ policy with no mutation_mode: use current library default
+        mutation_mode = "IGNORE"
 
     value_rules_list = []
     if "value_rules" in d:
@@ -97,7 +128,7 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
         if not isinstance(rules_raw, list):
             raise ValueError(f"value_rules must be a list, got {type(rules_raw).__name__}")
         value_rules_list.extend([_value_rule_from_dict(r) for r in rules_raw])
-        
+
     # Backward compatibility
     if "deny_rules" in d:
         rules_raw = d["deny_rules"]
@@ -105,7 +136,7 @@ def policy_from_dict(d: dict[str, Any]) -> StrictPolicy:
             for r in rules_raw:
                 r["action"] = "DENY"
                 value_rules_list.append(_value_rule_from_dict(r))
-                
+
     if "allow_rules" in d:
         rules_raw = d["allow_rules"]
         if isinstance(rules_raw, list):
@@ -165,9 +196,10 @@ def policy_to_yaml(policy: StrictPolicy, path: str | Path | None = None) -> str:
     """
     try:
         import yaml
-    except ImportError:
-        raise ImportError("PyYAML is required for YAML serialization: pip install secure-ingest[yaml]")
-
+    except ImportError as err:
+        raise ImportError(
+            "PyYAML is required for YAML serialization: pip install secure-ingest[yaml]"
+        ) from err
     d = policy_to_dict(policy)
     s = yaml.dump(d, default_flow_style=False, sort_keys=False)
     if path is not None:
@@ -185,9 +217,10 @@ def policy_from_yaml(source: str | Path) -> StrictPolicy:
     """
     try:
         import yaml
-    except ImportError:
-        raise ImportError("PyYAML is required for YAML serialization: pip install secure-ingest[yaml]")
-
+    except ImportError as err:
+        raise ImportError(
+            "PyYAML is required for YAML serialization: pip install secure-ingest[yaml]"
+        ) from err
     path = Path(source)
     if path.suffix in (".yaml", ".yml") or "/" in str(source) or "\\" in str(source):
         try:
@@ -205,11 +238,13 @@ def policy_from_yaml(source: str | Path) -> StrictPolicy:
 
 # --- Internal helpers ---
 
+
 def _value_rule_to_dict(rule: ValueRule) -> dict[str, str]:
     d: dict[str, str] = {"name": rule.name, "pattern": rule.pattern, "action": rule.action}
     if rule.description:
         d["description"] = rule.description
     return d
+
 
 def _value_rule_from_dict(d: dict[str, Any]) -> ValueRule:
     if "name" not in d or "pattern" not in d:
@@ -221,6 +256,7 @@ def _value_rule_from_dict(d: dict[str, Any]) -> ValueRule:
         description=str(d.get("description", "")),
     )
 
+
 def _registry_to_dict(registry: PatternRegistry) -> dict[str, Any]:
     """Serialize a PatternRegistry to dict.
 
@@ -228,6 +264,7 @@ def _registry_to_dict(registry: PatternRegistry) -> dict[str, Any]:
     Custom patterns (non-builtin) are listed under "custom".
     """
     from .parser import BUILTIN_PATTERNS
+
     builtin_names = {p.name for p in BUILTIN_PATTERNS}
     current_names = set(registry.names())
 

@@ -13,16 +13,17 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ValueRule:
     """A declarative rule applied to parsed string values.
-    
-    Can be used as either a DENY rule (reject if matched) or an 
+
+    Can be used as either a DENY rule (reject if matched) or an
     ALLOW rule (reject if NOT matched).
-    
+
     Args:
         name: Unique identifier for the rule.
         pattern: The regular expression to match.
         action: Either "DENY" or "ALLOW"
         description: Human readable explanation.
     """
+
     name: str
     pattern: str
     action: str = "DENY"

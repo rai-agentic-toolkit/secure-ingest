@@ -34,9 +34,7 @@ class BudgetExhaustedError(Exception):
         self.budget_type = budget_type
         self.limit = limit
         self.current = current
-        super().__init__(
-            message or f"Budget exhausted: {budget_type} ({current}/{limit})"
-        )
+        super().__init__(message or f"Budget exhausted: {budget_type} ({current}/{limit})")
 
 
 class CycleDetectedError(Exception):
@@ -51,8 +49,7 @@ class CycleDetectedError(Exception):
         self.cycle = cycle
         self.occurrences = occurrences
         super().__init__(
-            message
-            or f"Cycle detected: {' -> '.join(cycle)} (repeated {occurrences}x)"
+            message or f"Cycle detected: {' -> '.join(cycle)} (repeated {occurrences}x)"
         )
 
 

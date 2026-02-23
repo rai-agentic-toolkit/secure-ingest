@@ -30,11 +30,11 @@ endpoint_defense_policy = StrictPolicy(
 @app.post("/api/v1/analyze", response_model=dict)
 async def analyze_document(request: Request):
     """A heavily guarded webhook that ingests text for LLM analysis."""
-    
+
     # 1. Fetch raw bytes. Do NOT use await request.json() here,
     # because that triggers the vulnerable Python json decoder.
     body_bytes = await request.body()
-    
+
     try:
         # 2. Strict C/Rust-backed Parse and Validate
         result = parse(
@@ -44,7 +44,7 @@ async def analyze_document(request: Request):
             policy=endpoint_defense_policy,
             provenance=request.client.host if request.client else "unknown"
         )
-        
+
     except ParseError as e:
         # 3. If invalid, reject immediately with a 422
         raise HTTPException(
@@ -54,8 +54,8 @@ async def analyze_document(request: Request):
 
     # 4. Extract strict, validated Pydantic model
     validated_data: AnalysisPayload = result.content
-    
-    # 5. Execute Core Business Logic safely (Bare Metal) 
+
+    # 5. Execute Core Business Logic safely (Bare Metal)
     response = await openai.ChatCompletion.acreate(
         model="gpt-4",
         messages=[
@@ -63,7 +63,7 @@ async def analyze_document(request: Request):
             {"role": "user", "content": validated_data.raw_text}
         ]
     )
-    
+
     return {"analysis": response.choices[0].message.content, "chain_id": result.chain_id}
 ```
 

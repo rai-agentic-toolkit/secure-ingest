@@ -10,7 +10,7 @@ This research builds directly upon groundbreaking work by leading AI security re
 
 - **Beurer-Kellner et al.** for establishing the foundational design patterns for LLM agent security
 - **The NVIDIA AI Red Team** for practical sandboxing guidance that shaped our deployment security
-- **Debenedetti et al. (DeepMind)** for the CaMeL framework's control flow integrity principles  
+- **Debenedetti et al. (DeepMind)** for the CaMeL framework's control flow integrity principles
 - **Lakera's research team** for comprehensive indirect prompt injection analysis
 - **SecureClaw.dev** for recognizing agent-to-agent communication as a critical security domain
 
@@ -29,7 +29,7 @@ Our contribution is to **synthesize, specialize, and implement** these excellent
 **Key Patterns:**
 
 1. **Action-Selector**: LLM as translator to predefined actions
-2. **Plan-Then-Execute**: Fix action sequence before processing untrusted data  
+2. **Plan-Then-Execute**: Fix action sequence before processing untrusted data
 3. **Dual LLM**: Privileged + quarantined LLM separation
 4. **LLM Map-Reduce**: Isolated processing with constrained outputs
 5. **Code-Then-Execute**: Generate formal programs for execution
@@ -117,22 +117,22 @@ Our contribution is to **synthesize, specialize, and implement** these excellent
 
 ### Critical Gap 1: Agent-to-Agent Communication Security
 
-**Current State**: Existing research treats all external content as equally untrustworthy  
+**Current State**: Existing research treats all external content as equally untrustworthy
 **Our Innovation**: Differentiated trust model for agent-produced structured content with validation pipelines
 
 ### Critical Gap 2: High-Performance Content Ingestion
 
-**Current State**: Security patterns focus on interactive or low-throughput scenarios  
+**Current State**: Security patterns focus on interactive or low-throughput scenarios
 **Our Innovation**: Optimized architecture for high-volume, low-latency content processing
 
 ### Critical Gap 3: Structured Data Validation
 
-**Current State**: Generic content filtering and anomaly detection  
+**Current State**: Generic content filtering and anomaly detection
 **Our Innovation**: Schema-driven validation with semantic anomaly detection tuned for structured agent outputs
 
 ### Critical Gap 4: Composable Security Architecture
 
-**Current State**: Monolithic security frameworks requiring full system replacement  
+**Current State**: Monolithic security frameworks requiring full system replacement
 **Our Innovation**: Modular components that integrate with existing agent infrastructures
 
 ## Research Foundation Strengths
@@ -186,7 +186,7 @@ Our contribution is to **synthesize, specialize, and implement** these excellent
 This work represents a **specialization and optimization** of existing LLM security research for a critical real-world use case. Rather than proposing entirely new theoretical frameworks, we:
 
 1. **Apply proven patterns** to a previously underserved domain
-2. **Optimize performance** for production deployment at scale  
+2. **Optimize performance** for production deployment at scale
 3. **Provide concrete implementation** rather than abstract guidance
 4. **Focus on structured data** rather than general text processing
 

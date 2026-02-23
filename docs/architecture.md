@@ -55,7 +55,7 @@ graph TB
     end
 
     A1 -->|Raw Content| IQ
-    A2 -->|Raw Content| IQ  
+    A2 -->|Raw Content| IQ
     A3 -->|Raw Content| IQ
 
     IQ --> CP
@@ -143,7 +143,7 @@ flowchart TD
 
     CP[Content Parser] --> SV
     SV -->|Valid Schema| FV
-    FV -->|Valid Format| BV  
+    FV -->|Valid Format| BV
     BV -->|Valid Logic| SAD
 
     SAD --> TI
@@ -155,7 +155,7 @@ flowchart TD
     AL --> DT
 
     DT --> ACCEPT
-    DT --> QUARANTINE  
+    DT --> QUARANTINE
     DT --> REJECT
 ```
 
@@ -166,7 +166,7 @@ sequenceDiagram
     participant EA as External Agent
     participant IQ as Ingestion Queue
     participant CP as Content Parser
-    participant SV as Schema Validator  
+    participant SV as Schema Validator
     participant SAD as Anomaly Detector
     participant DS as Data Store
     participant CA as Consumer Agent
@@ -209,7 +209,7 @@ sequenceDiagram
 graph LR
     subgraph "UNTRUSTED"
         UT1[External Agents]
-        UT2[Raw Content]  
+        UT2[Raw Content]
         UT3[Parsing Results]
     end
 
@@ -350,7 +350,7 @@ flowchart LR
 ### Throughput Optimization
 
 - **Parallel Processing**: Multiple parser instances for high-volume ingestion
-- **Caching**: Schema validation results cached for repeated patterns  
+- **Caching**: Schema validation results cached for repeated patterns
 - **Batching**: Process multiple similar content pieces together
 - **Fast Models**: Optimized LLMs for parsing (vs. general reasoning)
 
@@ -420,7 +420,7 @@ graph TB
 flowchart TD
     subgraph "Monitoring Points"
         MP1[Parse Success/Failure Rates]
-        MP2[Schema Validation Rates]  
+        MP2[Schema Validation Rates]
         MP3[Anomaly Detection Rates]
         MP4[Processing Latency]
         MP5[Queue Depth]

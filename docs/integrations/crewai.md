@@ -24,7 +24,7 @@ class SecureTask(Task):
     def execute(self, context=None) -> str:
         # 1. Execute the standard task logic (run the AI agent)
         raw_output = super().execute(context)
-        
+
         # 2. Strict Parse and Validate
         try:
             result = parse(
@@ -33,10 +33,10 @@ class SecureTask(Task):
                 policy=task_output_policy,
                 provenance=self.agent.name if self.agent else "unknown_agent"
             )
-            
+
             # 3. Return the sanitized dict or text to the orchestrator
             return result.content
-            
+
         except ParseError as e:
             # 4. If invalid, throw a ValueError describing the rejection
             raise ValueError(

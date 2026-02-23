@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from .anomaly import SemanticAnomalyDetector
 from .parser import ContentParser, ParserConfig, StrictPolicy
@@ -37,9 +38,11 @@ def _load_policy(path_str: str) -> StrictPolicy:
 
     if suffix in (".yaml", ".yml"):
         from .serialization import policy_from_yaml
+
         return policy_from_yaml(content)
     elif suffix == ".json":
         from .serialization import policy_from_json
+
         return policy_from_json(content)
     else:
         print(
@@ -60,14 +63,17 @@ def main(argv: list[str] | None = None) -> int:
     p_ingest = sub.add_parser("ingest", help="Ingest content through the full pipeline")
     p_ingest.add_argument("file", nargs="?", help="Path to content file (JSON or raw text)")
     p_ingest.add_argument("--stdin", action="store_true", help="Read content from stdin")
-    p_ingest.add_argument("--type", "-t", required=True, choices=list(SCHEMA_REGISTRY.keys()),
-                          help="Content type")
+    p_ingest.add_argument(
+        "--type", "-t", required=True, choices=list(SCHEMA_REGISTRY.keys()), help="Content type"
+    )
     p_ingest.add_argument("--agent", "-a", default="unknown", help="Source agent ID")
     p_ingest.add_argument("--audit", action="store_true", help="Include audit trail in output")
     p_ingest.add_argument("--policy", "-p", help="Path to policy file (YAML or JSON)")
 
     # --- validate command ---
-    p_validate = sub.add_parser("validate", help="Validate content against a schema (no anomaly detection)")
+    p_validate = sub.add_parser(
+        "validate", help="Validate content against a schema (no anomaly detection)"
+    )
     p_validate.add_argument("file", nargs="?", help="Path to JSON content file")
     p_validate.add_argument("--stdin", action="store_true", help="Read from stdin")
     p_validate.add_argument("--type", "-t", required=True, choices=list(SCHEMA_REGISTRY.keys()))
@@ -187,7 +193,8 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 
     # If a policy is provided, use the parser with policy enforcement
     if getattr(args, "policy", None):
-        from .parser import parse as parse_content, ContentType, ParseError
+        from .parser import ContentType, ParseError
+        from .parser import parse as parse_content
 
         policy = _load_policy(args.policy)
 
@@ -226,18 +233,18 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         data = {"text": content}
 
     detector = SemanticAnomalyDetector()
-    result = detector.analyze(data)
+    anomaly_result = detector.analyze(data)
 
-    output = {
-        "is_anomaly": result.is_anomaly,
-        "composite_score": result.composite_score,
-        "component_scores": result.component_scores,
-        "decision": result.decision,
-        "confidence": result.confidence,
-        "triggered_patterns": result.triggered_patterns,
+    anomaly_output: dict[str, Any] = {
+        "is_anomaly": anomaly_result.is_anomaly,
+        "composite_score": anomaly_result.composite_score,
+        "component_scores": anomaly_result.component_scores,
+        "decision": anomaly_result.decision,
+        "confidence": anomaly_result.confidence,
+        "triggered_patterns": anomaly_result.triggered_patterns,
     }
-    print(json.dumps(output, indent=2))
-    return 0 if not result.is_anomaly else 1
+    print(json.dumps(anomaly_output, indent=2))
+    return 0 if not anomaly_result.is_anomaly else 1
 
 
 def entry_point() -> None:

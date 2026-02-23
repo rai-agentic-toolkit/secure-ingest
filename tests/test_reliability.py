@@ -10,35 +10,36 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from secure_ingest import IngestionPipeline
-from secure_ingest.reliability import DimensionScore, ReliabilityProfiler, ReliabilityReport
-
+from secure_ingest.reliability import ReliabilityProfiler
 
 # ---------------------------------------------------------------------------
 # Test fixtures — valid content that passes schema validation
 # ---------------------------------------------------------------------------
 
-CLEAN_FINDING = json.dumps({
-    "vulnerability_id": "CVE-2024-12345",
-    "severity": "HIGH",
-    "cvss_score": 7.5,
-    "description": "SQL injection vulnerability found in authentication module.",
-    "affected_systems": ["auth-service"],
-    "recommendation": "Apply security patches.",
-})
+CLEAN_FINDING = json.dumps(
+    {
+        "vulnerability_id": "CVE-2024-12345",
+        "severity": "HIGH",
+        "cvss_score": 7.5,
+        "description": "SQL injection vulnerability found in authentication module.",
+        "affected_systems": ["auth-service"],
+        "recommendation": "Apply security patches.",
+    }
+)
 
-CLEAN_REPORT = json.dumps({
-    "report_id": "RPT-20240115-A1B2C3",
-    "analysis_type": "threat_intelligence",
-    "key_findings": [
-        {"finding": "New malware variant detected in financial sector", "confidence": 0.85}
-    ],
-    "confidence": 0.85,
-})
+CLEAN_REPORT = json.dumps(
+    {
+        "report_id": "RPT-20240115-A1B2C3",
+        "analysis_type": "threat_intelligence",
+        "key_findings": [
+            {"finding": "New malware variant detected in financial sector", "confidence": 0.85}
+        ],
+        "confidence": 0.85,
+    }
+)
 
 # Invalid JSON — will fail at parse stage
 INVALID_JSON = "not json at all {{{"
@@ -51,6 +52,7 @@ def make_profiler() -> ReliabilityProfiler:
 # ---------------------------------------------------------------------------
 # Basic transparency
 # ---------------------------------------------------------------------------
+
 
 class TestTransparency:
     def test_returns_same_decision_as_pipeline(self):
@@ -97,6 +99,7 @@ class TestTransparency:
 # Report structure
 # ---------------------------------------------------------------------------
 
+
 class TestReportStructure:
     def test_report_has_all_four_dimensions(self):
         profiler = make_profiler()
@@ -113,8 +116,10 @@ class TestReportStructure:
             profiler.ingest("a", "security_finding", CLEAN_FINDING)
         report = profiler.report()
         expected = (
-            report.consistency.score + report.robustness.score +
-            report.predictability.score + report.safety.score
+            report.consistency.score
+            + report.robustness.score
+            + report.predictability.score
+            + report.safety.score
         ) / 4
         assert abs(report.overall_score - expected) < 1e-9
 
@@ -151,6 +156,7 @@ class TestReportStructure:
 # ---------------------------------------------------------------------------
 # Consistency dimension
 # ---------------------------------------------------------------------------
+
 
 class TestConsistency:
     def test_no_repeats_gives_perfect_consistency(self):
@@ -193,6 +199,7 @@ class TestConsistency:
 # Robustness dimension
 # ---------------------------------------------------------------------------
 
+
 class TestRobustness:
     def test_all_valid_content_gives_full_robustness(self):
         profiler = make_profiler()
@@ -222,8 +229,8 @@ class TestRobustness:
 
     def test_invalid_json_reduces_parse_success_rate(self):
         profiler = make_profiler()
-        profiler.ingest("a", "security_finding", CLEAN_FINDING)   # parses OK
-        profiler.ingest("a", "security_finding", INVALID_JSON)     # fails at parse
+        profiler.ingest("a", "security_finding", CLEAN_FINDING)  # parses OK
+        profiler.ingest("a", "security_finding", INVALID_JSON)  # fails at parse
         report = profiler.report()
         assert report.robustness.metrics["parse_success_rate"] < 1.0
 
@@ -231,6 +238,7 @@ class TestRobustness:
 # ---------------------------------------------------------------------------
 # Predictability dimension
 # ---------------------------------------------------------------------------
+
 
 class TestPredictability:
     def test_no_budget_gives_full_budget_headroom_score(self):
@@ -264,8 +272,8 @@ class TestPredictability:
 
     def test_invalid_content_lowers_stage_completion_rate(self):
         profiler = make_profiler()
-        profiler.ingest("a", "security_finding", CLEAN_FINDING)   # reaches anomaly
-        profiler.ingest("a", "security_finding", INVALID_JSON)     # fails before anomaly
+        profiler.ingest("a", "security_finding", CLEAN_FINDING)  # reaches anomaly
+        profiler.ingest("a", "security_finding", INVALID_JSON)  # fails before anomaly
         report = profiler.report()
         assert report.predictability.metrics["stage_completion_rate"] < 1.0
 
@@ -273,6 +281,7 @@ class TestPredictability:
 # ---------------------------------------------------------------------------
 # Safety dimension
 # ---------------------------------------------------------------------------
+
 
 class TestSafety:
     def test_clean_content_zero_violation_rate(self):
@@ -321,7 +330,7 @@ class TestSafety:
         assert report.safety.metrics["violation_rate"] > 0.0
 
     def test_policy_deny_rule_increases_violation_rate(self):
-        from secure_ingest import StrictPolicy, ValueRule
+        from secure_ingest import ValueRule
         from secure_ingest.parser import ContentParser, ParserConfig
 
         deny_rule = ValueRule(name="no_cve", pattern=r"CVE-", description="block CVE refs")
@@ -338,6 +347,7 @@ class TestSafety:
 # ---------------------------------------------------------------------------
 # Accumulation and multi-call behavior
 # ---------------------------------------------------------------------------
+
 
 class TestAccumulation:
     def test_total_calls_tracks_all_invocations(self):
@@ -371,40 +381,58 @@ class TestAccumulation:
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)

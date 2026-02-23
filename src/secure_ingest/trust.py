@@ -187,9 +187,7 @@ class TrustBoundary:
             self._rate_counters[agent_id] = []
 
         # Prune old entries
-        self._rate_counters[agent_id] = [
-            ts for ts in self._rate_counters[agent_id] if ts > cutoff
-        ]
+        self._rate_counters[agent_id] = [ts for ts in self._rate_counters[agent_id] if ts > cutoff]
 
         if len(self._rate_counters[agent_id]) >= self._rate_limit:
             return False

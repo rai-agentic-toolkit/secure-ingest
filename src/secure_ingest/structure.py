@@ -35,8 +35,7 @@ class StructureViolationError(Exception):
         self.to_tool = to_tool
         self.reason = reason
         super().__init__(
-            message
-            or f"Structure violation: {from_tool or '(start)'} -> {to_tool}: {reason}"
+            message or f"Structure violation: {from_tool or '(start)'} -> {to_tool}: {reason}"
         )
 
 
@@ -112,10 +111,7 @@ class ToolGraph:
 
         for g in graphs:
             if g.mode != "allow":
-                raise ValueError(
-                    "Cannot compose deny-mode graphs. "
-                    "Convert to allow-mode first."
-                )
+                raise ValueError("Cannot compose deny-mode graphs. Convert to allow-mode first.")
 
         # Entry points: intersection (only tools ALL graphs allow)
         entry_sets = [g.entry_points for g in graphs if g.entry_points]
@@ -197,9 +193,7 @@ class StructureMonitor:
                     "reason": "not_an_entry_point",
                 }
                 self._violations.append(violation)
-                raise StructureViolationError(
-                    None, tool_name, "not_an_entry_point"
-                )
+                raise StructureViolationError(None, tool_name, "not_an_entry_point")
         else:
             # Subsequent call — check transition
             if not self.graph.is_transition_allowed(self._last_tool, tool_name):

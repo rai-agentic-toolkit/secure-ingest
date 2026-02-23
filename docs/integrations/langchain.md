@@ -30,11 +30,11 @@ safe_policy = StrictPolicy(
 @tool(handle_tool_error=True)
 def fetch_user_data(user_id: str) -> dict:
     """Fetches user data from an external API and strictly validates it."""
-    
+
     # 1. Untrusted fetch
     response = requests.get(f"https://api.example.com/users/{user_id}")
     raw_payload = response.text
-    
+
     try:
         # 2. Strict Parse and Validate
         result = parse(
@@ -45,7 +45,7 @@ def fetch_user_data(user_id: str) -> dict:
         )
         # 3. Return the sanitized dict back to LangChain
         return result.content
-        
+
     except ParseError as e:
         # 4. If invalid, throw a Native LangChain ToolException
         raise ToolException(f"Failed to ingest: payload structurally invalid or too large. Details: {str(e)}")

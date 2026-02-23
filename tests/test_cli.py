@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -88,18 +86,14 @@ class TestCLIBasics:
         result = main(["ingest", "--type", "security_finding"])
         assert result == 1
 
-    def test_ingest_valid_file(
-        self, json_file: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_ingest_valid_file(self, json_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
         result = main(["ingest", "--type", "security_finding", str(json_file)])
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["decision"] == "accepted"
         assert result == 0
 
-    def test_scan_valid_content(
-        self, json_file: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_scan_valid_content(self, json_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
         result = main(["scan", str(json_file)])
         captured = capsys.readouterr()
         output = json.loads(captured.out)
@@ -125,12 +119,16 @@ class TestCLIPolicy:
         policy_yaml: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        result = main([
-            "ingest",
-            "--type", "security_finding",
-            "--policy", str(policy_yaml),
-            str(json_file),
-        ])
+        result = main(
+            [
+                "ingest",
+                "--type",
+                "security_finding",
+                "--policy",
+                str(policy_yaml),
+                str(json_file),
+            ]
+        )
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["decision"] == "accepted"
@@ -142,12 +140,16 @@ class TestCLIPolicy:
         policy_json: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        result = main([
-            "ingest",
-            "--type", "security_finding",
-            "--policy", str(policy_json),
-            str(json_file),
-        ])
+        result = main(
+            [
+                "ingest",
+                "--type",
+                "security_finding",
+                "--policy",
+                str(policy_json),
+                str(json_file),
+            ]
+        )
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["decision"] == "accepted"
@@ -166,12 +168,16 @@ class TestCLIPolicy:
         content_file = tmp_path / "secret.json"
         content_file.write_text(json.dumps(data), encoding="utf-8")
 
-        result = main([
-            "ingest",
-            "--type", "security_finding",
-            "--policy", str(policy_yaml),
-            str(content_file),
-        ])
+        result = main(
+            [
+                "ingest",
+                "--type",
+                "security_finding",
+                "--policy",
+                str(policy_yaml),
+                str(content_file),
+            ]
+        )
         assert result == 1
 
     def test_scan_with_policy(
@@ -180,11 +186,14 @@ class TestCLIPolicy:
         policy_yaml: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        result = main([
-            "scan",
-            "--policy", str(policy_yaml),
-            str(json_file),
-        ])
+        result = main(
+            [
+                "scan",
+                "--policy",
+                str(policy_yaml),
+                str(json_file),
+            ]
+        )
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["policy_applied"] is True
@@ -197,11 +206,14 @@ class TestCLIPolicy:
         content_file = tmp_path / "bad.txt"
         content_file.write_text("This has SECRET_KEY=hunter2 in it", encoding="utf-8")
 
-        result = main([
-            "scan",
-            "--policy", str(policy_yaml),
-            str(content_file),
-        ])
+        result = main(
+            [
+                "scan",
+                "--policy",
+                str(policy_yaml),
+                str(content_file),
+            ]
+        )
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["rejected"] is True
@@ -209,25 +221,31 @@ class TestCLIPolicy:
 
     def test_policy_file_not_found(self, json_file: Path) -> None:
         with pytest.raises(SystemExit):
-            main([
-                "ingest",
-                "--type", "security_finding",
-                "--policy", "/nonexistent/policy.yaml",
-                str(json_file),
-            ])
+            main(
+                [
+                    "ingest",
+                    "--type",
+                    "security_finding",
+                    "--policy",
+                    "/nonexistent/policy.yaml",
+                    str(json_file),
+                ]
+            )
 
-    def test_policy_unsupported_format(
-        self, tmp_path: Path, json_file: Path
-    ) -> None:
+    def test_policy_unsupported_format(self, tmp_path: Path, json_file: Path) -> None:
         bad_policy = tmp_path / "policy.toml"
         bad_policy.write_text("x = 1", encoding="utf-8")
         with pytest.raises(SystemExit):
-            main([
-                "ingest",
-                "--type", "security_finding",
-                "--policy", str(bad_policy),
-                str(json_file),
-            ])
+            main(
+                [
+                    "ingest",
+                    "--type",
+                    "security_finding",
+                    "--policy",
+                    str(bad_policy),
+                    str(json_file),
+                ]
+            )
 
     def test_ingest_with_audit_and_policy(
         self,
@@ -235,13 +253,17 @@ class TestCLIPolicy:
         policy_yaml: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        result = main([
-            "ingest",
-            "--type", "security_finding",
-            "--policy", str(policy_yaml),
-            "--audit",
-            str(json_file),
-        ])
+        result = main(
+            [
+                "ingest",
+                "--type",
+                "security_finding",
+                "--policy",
+                str(policy_yaml),
+                "--audit",
+                str(json_file),
+            ]
+        )
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["decision"] == "accepted"
@@ -253,7 +275,7 @@ class TestParserConfigPolicy:
     """Test that ParserConfig passes policy through to parse()."""
 
     def test_content_parser_with_policy(self, policy_yaml: Path) -> None:
-        from secure_ingest.parser import ContentParser, ParserConfig, StrictPolicy
+        from secure_ingest.parser import ContentParser, ParserConfig
         from secure_ingest.serialization import policy_from_yaml
 
         policy = policy_from_yaml(policy_yaml.read_text())
@@ -276,40 +298,58 @@ class TestParserConfigPolicy:
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)

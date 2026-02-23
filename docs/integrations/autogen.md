@@ -21,23 +21,23 @@ agent_defense_policy = StrictPolicy(
 )
 
 def secure_ingest_middleware(
-    recipient: ConversableAgent, 
-    messages: Optional[list[Dict]] = None, 
-    sender: Optional[ConversableAgent] = None, 
+    recipient: ConversableAgent,
+    messages: Optional[list[Dict]] = None,
+    sender: Optional[ConversableAgent] = None,
     config: Optional[Any] = None
 ) -> Union[str, Dict, None]:
     """Middleware hook to intercept and validate raw incoming AutoGen messages."""
-    
+
     if not messages:
         return False, None
-        
+
     latest_message = messages[-1]
     raw_content = latest_message.get("content", "")
-    
+
     # 1. Skip validation if the message is empty or system-generated empty calls
     if not raw_content:
         return False, None
-        
+
     try:
         # 2. Strict Parse and Validate
         result = parse(
@@ -46,15 +46,15 @@ def secure_ingest_middleware(
             policy=agent_defense_policy,
             provenance=sender.name if sender else "unknown"
         )
-        
+
         # 3. Message is safe. Overwrite the raw context with the validated structure.
         latest_message["content"] = result.content
         return False, None  # False = Continue regular agent processing
-        
+
     except ParseError as e:
         # 4. Message is unsafe. Intercept and block.
         error_reply = f"SYSTEM REJECTION: The previous payload was rejected by structural validation protocols. REASON: {str(e)}"
-        
+
         # True = Halt regular processing and return this error reply immediately to the sender
         return True, error_reply
 

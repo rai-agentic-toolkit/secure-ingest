@@ -3,7 +3,10 @@
 import pytest
 
 from secure_ingest import (
-    parse, ContentType, TaintLevel, ParseResult,
+    ContentType,
+    ParseResult,
+    TaintLevel,
+    parse,
 )
 
 
@@ -38,8 +41,10 @@ class TestParseTaint:
 
     def test_schema_validation_promotes_to_validated(self):
         from pydantic import BaseModel
+
         class MySchema(BaseModel):
             name: str
+
         result = parse('{"name": "Alice"}', ContentType.JSON, schema=MySchema)
         assert result.taint == TaintLevel.VALIDATED
 
@@ -92,7 +97,6 @@ class TestParseTaint:
         assert r1.chain_id == r2.chain_id == chain
 
 
-
 class TestContentHash:
     """Tests for content_hash integrity verification."""
 
@@ -143,8 +147,6 @@ class TestContentHash:
         result = parse('{"key": "value"}', ContentType.JSON)
         assert result.verify() is True
 
-
-
     def test_verify_backwards_compat_no_hash(self):
         """ParseResult without hash (backwards compat) returns True for verify."""
         result = ParseResult(
@@ -173,40 +175,58 @@ class TestBackwardsCompatibility:
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)
 
 
 def make_policy(**kwargs):
-    from secure_ingest import StrictPolicy, ContentType
+    from secure_ingest import ContentType, StrictPolicy
+
     opts = {
-        'allowed_types': frozenset([ContentType.JSON, ContentType.TEXT, ContentType.MARKDOWN, ContentType.YAML, ContentType.XML]),
-        'max_size_bytes': 100000,
-        'max_depth': 50
+        "allowed_types": frozenset(
+            [
+                ContentType.JSON,
+                ContentType.TEXT,
+                ContentType.MARKDOWN,
+                ContentType.YAML,
+                ContentType.XML,
+            ]
+        ),
+        "max_size_bytes": 100000,
+        "max_depth": 50,
     }
-    if 'max_size' in kwargs:
-        kwargs['max_size_bytes'] = kwargs.pop('max_size')
-    if 'strip_injections' in kwargs:
-        val = kwargs.pop('strip_injections')
-        kwargs['mutation_mode'] = "REJECT" if val else "IGNORE"
-    if 'deny_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('deny_rules')
-    if 'allow_rules' in kwargs:
-        kwargs['value_rules'] = kwargs.pop('allow_rules')
+    if "max_size" in kwargs:
+        kwargs["max_size_bytes"] = kwargs.pop("max_size")
+    if "strip_injections" in kwargs:
+        val = kwargs.pop("strip_injections")
+        kwargs["mutation_mode"] = "REJECT" if val else "IGNORE"
+    if "deny_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("deny_rules")
+    if "allow_rules" in kwargs:
+        kwargs["value_rules"] = kwargs.pop("allow_rules")
     opts.update(kwargs)
     return StrictPolicy(**opts)

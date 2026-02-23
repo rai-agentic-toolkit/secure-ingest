@@ -9,7 +9,7 @@ This threat model analyzes the security landscape for agent-to-agent content ing
 ### Critical Assets
 
 1. **Consuming Agent Integrity**: The agent that ingests content must not be compromised
-2. **System Operations**: Core system functions must remain under legitimate control  
+2. **System Operations**: Core system functions must remain under legitimate control
 3. **Sensitive Data**: Information processed by consuming agents must be protected
 4. **Service Availability**: The ingestion system must remain operational under attack
 5. **Audit Trail**: Complete record of all content processing decisions
@@ -38,7 +38,7 @@ graph TB
     end
 
     UA -.->|Cannot Access| DS
-    CA -.->|Cannot Access| API  
+    CA -.->|Cannot Access| API
     MA -.->|Cannot Access| SYS
 
     UC --> IQ
@@ -67,7 +67,7 @@ graph TB
 
 ### 1. Malicious Agent Operators
 
-**Motivation**: Data theft, system disruption, competitive advantage  
+**Motivation**: Data theft, system disruption, competitive advantage
 **Capabilities**:
 
 - Control over agent outputs
@@ -84,11 +84,11 @@ graph TB
 
 ### 2. Compromised Legitimate Agents
 
-**Motivation**: Unintentional harm due to compromise  
+**Motivation**: Unintentional harm due to compromise
 **Capabilities**:
 
 - Previously trusted reputation
-- Access to legitimate content channels  
+- Access to legitimate content channels
 - Knowledge of internal systems and processes
 - Ability to mimic normal behavior patterns
 
@@ -101,7 +101,7 @@ graph TB
 
 ### 3. External Attackers
 
-**Motivation**: Reconnaissance, data theft, system disruption  
+**Motivation**: Reconnaissance, data theft, system disruption
 **Capabilities**:
 
 - Network-level attacks
@@ -124,7 +124,7 @@ graph TB
 sequenceDiagram
     participant MA as Malicious Agent
     participant IQ as Ingestion Queue
-    participant CP as Content Parser  
+    participant CP as Content Parser
     participant SV as Schema Validator
     participant CA as Consumer Agent
 
@@ -164,7 +164,7 @@ sequenceDiagram
 }
 ```
 
-**Without Our Defense**: Consumer agent includes sensitive data in summaries  
+**Without Our Defense**: Consumer agent includes sensitive data in summaries
 **With Our Defense**: Anomaly detector flags instruction-like language, content quarantined
 
 #### Scenario 2: Behavioral Manipulation Through Memory Poisoning
@@ -188,7 +188,7 @@ sequenceDiagram
 }
 ```
 
-**Without Our Defense**: Consumer agent develops persistent bias  
+**Without Our Defense**: Consumer agent develops persistent bias
 **With Our Defense**: Stateless parsing prevents memory accumulation, behavioral analysis detects patterns
 
 #### Scenario 3: Tool Invocation Hijacking
@@ -209,7 +209,7 @@ sequenceDiagram
 }
 ```
 
-**Without Our Defense**: Consumer agent executes malicious tools  
+**Without Our Defense**: Consumer agent executes malicious tools
 **With Our Defense**: Parser has no tool access, cannot execute commands
 
 ### Secondary Attack Vectors
@@ -219,7 +219,7 @@ sequenceDiagram
 **Attack Method**: Craft content that exploits edge cases in schema validation
 
 - Boundary value attacks on numeric fields
-- Unicode normalization attacks in text fields  
+- Unicode normalization attacks in text fields
 - Nested object depth attacks
 - Type confusion attacks
 
@@ -254,7 +254,7 @@ graph TD
     ROOT[Compromise Consumer Agent]
 
     A1[Inject Malicious Instructions]
-    A2[Manipulate System Behavior]  
+    A2[Manipulate System Behavior]
     A3[Exfiltrate Sensitive Data]
 
     A11[Direct Prompt Injection]
@@ -294,26 +294,26 @@ graph TD
 
 #### 1. Stateless Content Parser
 
-**Security Property**: Cannot be persistently compromised  
-**Threat Mitigation**: Memory poisoning, persistent behavioral changes  
+**Security Property**: Cannot be persistently compromised
+**Threat Mitigation**: Memory poisoning, persistent behavioral changes
 **Implementation**: Fresh parser instance for each content piece
 
 #### 2. Capability Isolation
 
-**Security Property**: Parser cannot execute actions  
-**Threat Mitigation**: Tool hijacking, direct system compromise  
+**Security Property**: Parser cannot execute actions
+**Threat Mitigation**: Tool hijacking, direct system compromise
 **Implementation**: Sandboxed LLM with no tool access
 
 #### 3. Schema Enforcement
 
-**Security Property**: Only predefined formats allowed  
-**Threat Mitigation**: Arbitrary content injection, format confusion attacks  
+**Security Property**: Only predefined formats allowed
+**Threat Mitigation**: Arbitrary content injection, format confusion attacks
 **Implementation**: Strict JSON schema validation with rejection of non-conforming content
 
 #### 4. Trust Boundary Separation
 
-**Security Property**: Clear isolation between untrusted input and trusted operations  
-**Threat Mitigation**: Privilege escalation, unauthorized access  
+**Security Property**: Clear isolation between untrusted input and trusted operations
+**Threat Mitigation**: Privilege escalation, unauthorized access
 **Implementation**: Multi-stage validation pipeline with air gaps
 
 ### Secondary Controls (Detection & Response)
@@ -323,7 +323,7 @@ graph TD
 **Detection Capabilities**:
 
 - Instruction-like language in data fields
-- Unusual linguistic patterns suggesting injections  
+- Unusual linguistic patterns suggesting injections
 - Statistical outliers in content distribution
 - Behavioral embedding analysis
 
@@ -386,7 +386,7 @@ alerts:
 - All content submission attempts
 - Parse attempts and results
 - Schema validation outcomes
-- Anomaly detection decisions  
+- Anomaly detection decisions
 - Access to validated content
 
 **Forensic Capabilities**:
@@ -403,7 +403,7 @@ alerts:
 ```yaml
 rate_limits:
   per_source_agent: "100 submissions/hour"
-  per_content_type: "50 MB/hour"  
+  per_content_type: "50 MB/hour"
   total_system: "10000 submissions/hour"
 
 resource_quotas:
@@ -422,7 +422,7 @@ circuit_breakers:
     action: "fail_fast_mode"
 
   anomaly_detection_overload:
-    threshold: 0.8  
+    threshold: 0.8
     window: "1 minute"
     action: "emergency_bypass"
 ```
@@ -441,7 +441,7 @@ circuit_breakers:
 | Threat | Likelihood | Impact | Risk Level | Primary Mitigation |
 |--------|------------|--------|------------|-------------------|
 | Indirect Prompt Injection | High | High | **CRITICAL** | Stateless Parser + Schema Validation |
-| Memory Poisoning | Medium | High | **HIGH** | Stateless Operation |  
+| Memory Poisoning | Medium | High | **HIGH** | Stateless Operation |
 | Tool Hijacking | Medium | Critical | **HIGH** | Capability Isolation |
 | Data Exfiltration | High | Medium | **HIGH** | Anomaly Detection |
 | Resource Exhaustion | Medium | Low | **MEDIUM** | Rate Limiting |
@@ -462,7 +462,7 @@ circuit_breakers:
 #### 2. Formal Verification
 
 - Mathematical proofs of isolation properties
-- Schema completeness verification  
+- Schema completeness verification
 - Access control policy validation
 - Information flow analysis
 
@@ -478,11 +478,11 @@ circuit_breakers:
 #### Security Metrics
 
 - **Injection Prevention Rate**: > 99.9% of malicious content blocked
-- **False Positive Rate**: < 0.1% of legitimate content blocked  
+- **False Positive Rate**: < 0.1% of legitimate content blocked
 - **Mean Time to Detection**: < 1 minute for attack attempts
 - **Mean Time to Response**: < 5 minutes for confirmed threats
 
-#### Operational Metrics  
+#### Operational Metrics
 
 - **Processing Latency**: < 100ms per content piece
 - **System Availability**: > 99.95% uptime

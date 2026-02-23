@@ -6,7 +6,9 @@ Content that doesn't match is discarded.
 
 from __future__ import annotations
 
-SECURITY_FINDING_SCHEMA: dict = {
+from typing import Any
+
+SECURITY_FINDING_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Security Finding",
     "type": "object",
@@ -54,7 +56,7 @@ SECURITY_FINDING_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-ANALYSIS_REPORT_SCHEMA: dict = {
+ANALYSIS_REPORT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Analysis Report",
     "type": "object",
@@ -110,7 +112,7 @@ ANALYSIS_REPORT_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
-DATA_SUMMARY_SCHEMA: dict = {
+DATA_SUMMARY_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Data Summary",
     "type": "object",
@@ -148,7 +150,7 @@ DATA_SUMMARY_SCHEMA: dict = {
 }
 
 # Registry of all known content types -> schemas
-SCHEMA_REGISTRY: dict[str, dict] = {
+SCHEMA_REGISTRY: dict[str, dict[str, Any]] = {
     "security_finding": SECURITY_FINDING_SCHEMA,
     "analysis_report": ANALYSIS_REPORT_SCHEMA,
     "data_summary": DATA_SUMMARY_SCHEMA,
