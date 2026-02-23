@@ -54,6 +54,21 @@ optionally validates against Pydantic schemas, and freezes content once validate
 - **Strict Typing** — uses Pydantic to tightly control data shapes
 - **Immutable on VALIDATED** — `result.content` becomes a read-only `MappingProxyType` after schema validation
 
+## Core API vs Pipeline API
+
+`secure-ingest` offers two entry points depending on your needs:
+
+1. **`parse(...)`** (Core API)
+   A pure, stateless function. It performs structural validation, payload truncation, and schema checking. Use this when you just want to guarantee that a payload matches a Pydantic schema and isn't a zip bomb or million-token DOS attack. It is fast and has zero dependencies outside of standard Python and Pydantic.
+
+2. **`IngestionPipeline(...)`** (Advanced API)
+   A stateful pipeline built *on top* of `parse()`. It adds:
+   - **Semantic Anomaly Detection** (prompt injection heuristics)
+   - **Request Budgets** (rate limiting and infinite-loop breaking)
+   - **Graph Traversal Limits** (preventing infinite tool-call cycles)
+   - **Trust Decisions** (explicit Accept/Quarantine/Reject routing)
+   Use the pipeline when ingesting content directly into an autonomous agent or executing function calls.
+
 ## Content Types
 
 | Type | Key Security Features |
