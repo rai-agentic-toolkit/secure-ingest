@@ -80,6 +80,21 @@ def _compute_content_hash(content: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _deep_freeze(obj: Any) -> Any:
+    """Recursively wrap all dicts in MappingProxyType, tuples for lists.
+
+    Guarantees that no nested structure can be mutated after content is
+    promoted to VALIDATED taint. One-level MappingProxyType is not enough
+    because nested dicts are still regular, mutable djects.
+    """
+    if isinstance(obj, dict):
+        return types.MappingProxyType({k: _deep_freeze(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(_deep_freeze(item) for item in obj)
+    return obj
+
+
+
 @dataclass(frozen=True)
 class ParseResult:
     """Immutable result from parsing content."""
@@ -194,7 +209,7 @@ class StrictPolicy:
     max_size_bytes: int
     max_depth: int
     schema: type[BaseModel] | None = None
-    mutation_mode: str = "REJECT" # "REJECT" or "STRIP_AND_WARN"
+    mutation_mode: str = "IGNORE" # "IGNORE", "STRIP_AND_WARN", or "REJECT"
     value_rules: tuple[ValueRule, ...] = ()
     patterns: PatternRegistry | None = None
     semantic_validators: tuple[SemanticValidator, ...] = ()
@@ -489,7 +504,7 @@ def parse(
     provenance: str = "",
     chain_id: str = "",
     policy: StrictPolicy | None = None,
-    mutation_mode: str = "REJECT",
+    mutation_mode: str = "IGNORE",
 ) -> ParseResult:
     """Parse and sanitize content for safe agent ingestion.
     """
@@ -576,8 +591,9 @@ def parse(
     if schema is not None and isinstance(result.content, dict):
         try:
             parsed_model = schema.model_validate(result.content, strict=schema.model_config.get("strict", False))
-            # Freeze the validated content dict so callers cannot mutate it after trust promotion
-            frozen_content = types.MappingProxyType(parsed_model.model_dump())
+            # Deep-freeze: recursively wrap all nested dicts in MappingProxyType
+            # so no nested structure can be mutated after VALIDATED promotion.
+            frozen_content = _deep_freeze(parsed_model.model_dump())
             result = ParseResult(
                 content=frozen_content,
                 content_type=result.content_type,

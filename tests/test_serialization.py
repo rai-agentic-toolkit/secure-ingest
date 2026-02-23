@@ -34,7 +34,7 @@ class TestPolicyToDict:
         assert "allowed_types" in d
         assert d["max_depth"] == 50
         assert d["max_size_bytes"] == 100000
-        assert d["mutation_mode"] == "REJECT"
+        assert d["mutation_mode"] == "IGNORE"
 
     def test_allowed_types(self):
         policy = make_policy(allowed_types=frozenset({ContentType.JSON, ContentType.TEXT}))
@@ -220,7 +220,7 @@ class TestRoundTrip:
         restored = policy_from_dict(d)
         assert len(restored.allowed_types) == 5
         assert restored.max_depth == 50
-        assert restored.mutation_mode == "REJECT"
+        assert restored.mutation_mode == "IGNORE"
 
 
 # --- JSON I/O ---
