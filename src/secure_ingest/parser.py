@@ -58,13 +58,81 @@ class TaintLevel(Enum):
 
 
 class ParseError(Exception):
-    """Raised when content fails validation."""
+    """Base class for all parse/validation failures.
+
+    All subclasses expose `.content_type` and `.violations` so existing
+    ``except ParseError`` handlers continue to work unchanged.
+    """
 
     def __init__(self, message: str, content_type: str | None = None,
                  violations: list[str] | None = None):
         super().__init__(message)
         self.content_type = content_type
         self.violations = violations or []
+
+
+class SizeExceededError(ParseError):
+    """Content exceeds the configured byte-size limit."""
+
+    def __init__(self, limit: int, actual: int, content_type: str | None = None):
+        self.limit = limit
+        self.actual = actual
+        super().__init__(
+            f"Content exceeds size limit ({actual} > {limit} bytes)",
+            content_type=content_type,
+            violations=["policy_size_exceeded"],
+        )
+
+
+class DepthExceededError(ParseError):
+    """Structured content nesting exceeds the configured depth limit."""
+
+    def __init__(self, max_depth: int, content_type: str | None = None):
+        self.max_depth = max_depth
+        super().__init__(
+            f"JSON nesting depth exceeds maximum of {max_depth}",
+            content_type=content_type or "json",
+            violations=["excessive_nesting"],
+        )
+
+
+class SchemaValidationError(ParseError):
+    """Content failed Pydantic schema validation."""
+
+    def __init__(self, pydantic_errors: list[dict], content_type: str | None = None):
+        self.pydantic_errors = pydantic_errors
+        violations = [f"schema_violation:{err['loc'][0]}_{err['msg']}" for err in pydantic_errors]
+        super().__init__(
+            f"Content failed schema validation ({len(pydantic_errors)} error(s))",
+            content_type=content_type,
+            violations=violations,
+        )
+
+
+class SemanticRejectedError(ParseError):
+    """Content was rejected by one or more SemanticValidator instances."""
+
+    def __init__(self, rejected_by: list[str], content_type: str | None = None):
+        self.rejected_by = rejected_by
+        super().__init__(
+            f"Content rejected by semantic validator(s): {', '.join(rejected_by)}",
+            content_type=content_type,
+            violations=[f"semantic_validator_rejected:{name}" for name in rejected_by],
+        )
+
+
+class PolicyTypeError(ParseError):
+    """Content type is not permitted by the active StrictPolicy."""
+
+    def __init__(self, attempted: str, allowed: list[str]):
+        self.attempted = attempted
+        self.allowed = allowed
+        allowed_str = ", ".join(sorted(allowed))
+        super().__init__(
+            f"Content type '{attempted}' not allowed by policy (allowed: {allowed_str})",
+            content_type=attempted,
+            violations=["policy_type_denied"],
+        )
 
 
 def _compute_content_hash(content: Any) -> str:
@@ -118,8 +186,90 @@ class ParseResult:
             return True
         return self.content_hash == _compute_content_hash(self.content)
 
+    def as_validated(self) -> "ParseResult":
+        """Return self if taint level is VALIDATED, otherwise raise ParseError.
 
-# --- Injection pattern system ---
+        Use this to assert trust at a boundary without manually checking
+        ``result.taint == TaintLevel.VALIDATED``::
+
+            safe = parse(raw, ContentType.JSON, schema=MySchema).as_validated()
+            # safe.content is guaranteed to be a frozen MappingProxyType
+
+        Raises:
+            ParseError: if taint < VALIDATED (no schema was applied, or
+                        content was only structurally sanitized).
+        """
+        if self.taint < TaintLevel.VALIDATED:
+            raise ParseError(
+                f"ParseResult has taint level {self.taint.name}, expected VALIDATED. "
+                "Pass a Pydantic schema to parse() to promote to VALIDATED.",
+                content_type=self.content_type.value if self.content_type else None,
+                violations=["insufficient_taint"],
+            )
+        return self
+
+
+# --- @require_validated decorator ---
+
+import functools
+import inspect
+
+def require_validated(func):
+    """Decorator that asserts the first ParseResult argument is VALIDATED.
+
+    Enforces taint-level contracts at function boundaries without
+    boilerplate ``if result.taint < TaintLevel.VALIDATED: raise ...``::
+
+        @require_validated
+        def call_llm(result: ParseResult) -> str:
+            return openai.chat(str(result.content))  # guaranteed VALIDATED
+
+        @require_validated
+        async def async_handler(result: ParseResult) -> dict:
+            ...
+
+    Raises ParseError (insufficient_taint) if the first positional argument
+    whose type annotation is ParseResult has taint < VALIDATED.
+    """
+    @functools.wraps(func)
+    def _sync_wrapper(*args, **kwargs):
+        _enforce_validated(func, args, kwargs)
+        return func(*args, **kwargs)
+
+    @functools.wraps(func)
+    async def _async_wrapper(*args, **kwargs):
+        _enforce_validated(func, args, kwargs)
+        return await func(*args, **kwargs)
+
+    return _async_wrapper if inspect.iscoroutinefunction(func) else _sync_wrapper
+
+
+def _enforce_validated(func, args, kwargs):
+    """Check that any ParseResult arg/kwarg has VALIDATED taint."""
+    hints = func.__annotations__
+    params = list(inspect.signature(func).parameters.keys())
+
+    # Check positional args
+    for i, (name, val) in enumerate(zip(params, args)):
+        if isinstance(val, ParseResult):
+            if val.taint < TaintLevel.VALIDATED:
+                raise ParseError(
+                    f"Argument '{name}' passed to {func.__name__}() has taint level "
+                    f"{val.taint.name}; @require_validated requires VALIDATED. "
+                    "Pass a Pydantic schema to parse() to promote.",
+                    violations=["insufficient_taint"],
+                )
+    # Check keyword args
+    for name, val in kwargs.items():
+        if isinstance(val, ParseResult):
+            if val.taint < TaintLevel.VALIDATED:
+                raise ParseError(
+                    f"Argument '{name}' passed to {func.__name__}() has taint level "
+                    f"{val.taint.name}; @require_validated requires VALIDATED.",
+                    violations=["insufficient_taint"],
+                )
+
+
 
 @dataclass(frozen=True)
 class InjectionPattern:
@@ -289,13 +439,9 @@ def _check_injection(text: str, patterns: list[tuple[re.Pattern[str], str]] | No
 
 
 def _check_json_depth(obj: Any, max_depth: int = _MAX_JSON_DEPTH, _current: int = 0) -> None:
-    """Raise ParseError if JSON nesting exceeds max depth."""
+    """Raise DepthExceededError if JSON nesting exceeds max depth."""
     if _current > max_depth:
-        raise ParseError(
-            f"JSON nesting depth exceeds maximum of {max_depth}",
-            content_type="json",
-            violations=["excessive_nesting"],
-        )
+        raise DepthExceededError(max_depth=max_depth, content_type="json")
     if isinstance(obj, dict):
         for v in obj.values():
             _check_json_depth(v, max_depth, _current + 1)
@@ -517,11 +663,9 @@ def parse(
     # --- StrictPolicy enforcement (structural, before any parsing) ---
     if policy is not None:
         if content_type not in policy.allowed_types:
-            allowed = ", ".join(t.value for t in sorted(policy.allowed_types, key=lambda t: t.value))
-            raise ParseError(
-                f"Content type '{content_type.value}' not allowed by policy (allowed: {allowed})",
-                content_type=content_type.value,
-                violations=["policy_type_denied"],
+            raise PolicyTypeError(
+                attempted=content_type.value,
+                allowed=[t.value for t in policy.allowed_types],
             )
 
         _structured_types = {ContentType.JSON, ContentType.YAML, ContentType.XML}
@@ -534,11 +678,7 @@ def parse(
 
     size_bytes = len(content) if isinstance(content, bytes) else len(content.encode("utf-8"))
     if size_bytes > max_size:
-        raise ParseError(
-            f"Content exceeds size limit ({max_size} bytes)",
-            content_type=content_type.value,
-            violations=["policy_size_exceeded"],
-        )
+        raise SizeExceededError(limit=max_size, actual=size_bytes, content_type=content_type.value)
 
     if policy is not None:
         if policy.patterns is not None:
@@ -607,11 +747,10 @@ def parse(
             )
             taint = TaintLevel.VALIDATED
         except ValidationError as e:
-            raise ParseError(
-                f"Content failed schema validation",
+            raise SchemaValidationError(
+                pydantic_errors=e.errors(),
                 content_type=content_type.value,
-                violations=[f"schema_violation:{err['loc'][0]}_{err['msg']}" for err in e.errors()],
-            )
+            ) from e
 
     # Collect semantic validators: explicit arg + policy-level validators
     _all_semantic_validators: list[SemanticValidator] = []
@@ -645,11 +784,7 @@ def parse(
                     new_warnings.extend([f"semantic_violation:{v}" for v in violations])
                     new_stripped.extend(violations)
         if rejected_by:
-            raise ParseError(
-                f"Content rejected by semantic validator(s): {', '.join(rejected_by)}",
-                content_type=content_type.value,
-                violations=[f"semantic_validator_rejected:{name}" for name in rejected_by],
-            )
+            raise SemanticRejectedError(rejected_by=rejected_by, content_type=content_type.value)
         result = ParseResult(
             content=result.content,
             content_type=result.content_type,

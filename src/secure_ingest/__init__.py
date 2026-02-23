@@ -3,9 +3,15 @@
 from .parser import (
     parse, ParseResult, ParseError, ContentType, TaintLevel,
     StrictPolicy, InjectionPattern, PatternRegistry, BUILTIN_PATTERNS,
+    # Exception hierarchy
+    SizeExceededError, DepthExceededError, SchemaValidationError,
+    SemanticRejectedError, PolicyTypeError,
+    # Trust enforcement
+    require_validated,
 )
 from .rules import ValueRule
 from .semantic import SemanticValidator, BaseSemanticScanner
+from .async_parse import parse_async, AsyncSemanticValidator
 from .serialization import (
     policy_to_dict, policy_from_dict,
     policy_to_json, policy_from_json,
@@ -22,18 +28,29 @@ from .structure import (
 from .reliability import ReliabilityProfiler, ReliabilityReport, DimensionScore
 from .llm import ValidatedPayload
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __all__ = [
-    "parse", "ParseResult", "ParseError", "ContentType", "TaintLevel",
+    # Core parse API
+    "parse", "parse_async", "ParseResult", "ContentType", "TaintLevel",
     "StrictPolicy", "ValueRule", "InjectionPattern", "PatternRegistry", "BUILTIN_PATTERNS",
-    "SemanticValidator", "BaseSemanticScanner",
+    # Exception hierarchy
+    "ParseError", "SizeExceededError", "DepthExceededError",
+    "SchemaValidationError", "SemanticRejectedError", "PolicyTypeError",
+    # Semantic validation
+    "SemanticValidator", "AsyncSemanticValidator", "BaseSemanticScanner",
+    # Trust enforcement
+    "require_validated",
+    # Policy serialization
     "policy_to_dict", "policy_from_dict",
     "policy_to_json", "policy_from_json",
     "policy_to_yaml", "policy_from_yaml",
+    # Budget & structure
     "BudgetConfig", "RequestBudget",
     "BudgetExhaustedError", "CycleDetectedError",
     "IngestionPipeline", "IngestResult",
     "ToolGraph", "StructureMonitor", "StructureViolationError",
+    # Observability
     "ReliabilityProfiler", "ReliabilityReport", "DimensionScore",
-    "ValidatedPayload"
+    # LLM helpers
+    "ValidatedPayload",
 ]
