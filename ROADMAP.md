@@ -38,19 +38,19 @@ Without `py.typed`, mypy and pyright treat the entire library as untyped. All th
 
 ## v2.3.0 — API Clarity & Docs
 
-### 🟡 Clarify `content_hash` semantics
+### ✅ Clarify `content_hash` semantics
 
 The hash is computed on the *parsed, normalized representation* — not the raw input bytes. This is correct for deduplication but wrong for tamper detection. The docstring doesn't say which use case is intended.
 
 **Fix:** rename to `content_fingerprint` or add a `raw_hash` field for wire-byte integrity. Document clearly in `ParseResult` docstring and README Security Model section.
 
-### 🟡 Expose `SemanticAnomalyDetector` thresholds via `StrictPolicy`
+### ✅ Expose `SemanticAnomalyDetector` thresholds via `StrictPolicy`
 
 `IngestionPipeline` runs `SemanticAnomalyDetector` on every call, but its thresholds are internal and not configurable without subclassing `IngestionPipeline`. Users can observe behavior via `ReliabilityProfiler` but cannot tune it declaratively.
 
 **Fix:** add `anomaly_config: AnomalyConfig | None = None` to `StrictPolicy` (or `IngestionPipeline` constructor). Document what triggers quarantine vs. reject.
 
-### 🟢 Unify `content_hash` / `testing._hash()` implementations
+### ✅ Unify `content_hash` / `testing._hash()` implementations
 
 `parser._compute_content_hash()` and `testing._hash()` are separate implementations of the same algorithm. If the hashing strategy changes, test fixtures will produce hashes that don't match real parse results.
 

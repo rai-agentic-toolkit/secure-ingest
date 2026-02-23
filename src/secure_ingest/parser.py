@@ -144,7 +144,7 @@ class PolicyTypeError(ParseError):
         )
 
 
-def _compute_content_hash(content: Any) -> str:
+def content_hash_of(content: Any) -> str:
     """Compute a SHA-256 digest of content for integrity verification.
 
     Deterministic: same content always produces the same hash,
@@ -173,7 +173,12 @@ def _deep_freeze(obj: Any) -> Any:
 
 @dataclass(frozen=True)
 class ParseResult:
-    """Immutable result from parsing content."""
+    """Immutable result from parsing content.
+
+    Attributes:
+        content_hash: Structural fingerprint of the parsed content (for deduplication).
+        raw_hash: Strict SHA-256 of the unparsed input bytes (for wire-integrity checking).
+    """
 
     content: Any
     content_type: ContentType
@@ -184,6 +189,7 @@ class ParseResult:
     provenance: str = ""
     chain_id: str = ""
     content_hash: str = ""
+    raw_hash: str | None = None
 
     def verify(self) -> bool:
         """Verify content integrity against the stored hash.
@@ -193,7 +199,7 @@ class ParseResult:
         """
         if not self.content_hash:
             return True
-        return self.content_hash == _compute_content_hash(self.content)
+        return self.content_hash == content_hash_of(self.content)
 
     def as_validated(self) -> ParseResult:
         """Return self if taint level is VALIDATED, otherwise raise ParseError.
@@ -805,7 +811,9 @@ def parse(
     else:
         max_size = _MAX_SIZE_BYTES
 
-    size_bytes = len(content) if isinstance(content, bytes) else len(content.encode("utf-8"))
+    raw_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
+    size_bytes = len(raw_bytes)
+    _raw_hash = hashlib.sha256(raw_bytes).hexdigest()
     if size_bytes > max_size:
         raise SizeExceededError(limit=max_size, actual=size_bytes, content_type=content_type.value)
 
@@ -884,7 +892,8 @@ def parse(
                 taint=taint,
                 provenance=provenance,
                 chain_id=chain_id,
-                content_hash=_compute_content_hash(result.content),
+                content_hash=content_hash_of(result.content),
+                raw_hash=_raw_hash,
             )
             taint = TaintLevel.VALIDATED
         except ValidationError as e:
@@ -984,7 +993,8 @@ def parse(
         taint=taint,
         provenance=provenance,
         chain_id=chain_id,
-        content_hash=_compute_content_hash(result.content),
+        content_hash=content_hash_of(result.content),
+        raw_hash=_raw_hash,
     )
 
 

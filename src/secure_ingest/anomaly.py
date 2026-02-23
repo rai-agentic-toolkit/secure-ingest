@@ -46,6 +46,14 @@ DEFAULT_THRESHOLD = 0.45
 
 
 @dataclass
+class AnomalyConfig:
+    """Configuration for semantic anomaly detection thresholds."""
+
+    quarantine_threshold: float = DEFAULT_THRESHOLD
+    reject_threshold: float = 0.70
+
+
+@dataclass
 class AnomalyResult:
     """Result of semantic anomaly analysis."""
 
@@ -206,11 +214,11 @@ class SemanticAnomalyDetector:
 
     def __init__(
         self,
-        threshold: float = DEFAULT_THRESHOLD,
+        config: AnomalyConfig | None = None,
         weights: dict[str, float] | None = None,
         patterns: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._threshold = threshold
+        self._config = config or AnomalyConfig()
         self._weights = weights or DEFAULT_WEIGHTS
         self._patterns = patterns or INJECTION_PATTERNS
 
@@ -277,15 +285,19 @@ class SemanticAnomalyDetector:
         )
 
         # Decision logic
-        is_anomaly = composite > self._threshold
-        if composite > 0.7:
+        is_anomaly = composite > self._config.quarantine_threshold
+        if composite > self._config.reject_threshold:
             decision = "reject"
-        elif composite > self._threshold:
+        elif composite > self._config.quarantine_threshold:
             decision = "quarantine"
         else:
             decision = "accept"
 
-        confidence = min(1.0, abs(composite - self._threshold) / max(self._threshold, 0.01))
+        confidence = min(
+            1.0,
+            abs(composite - self._config.quarantine_threshold)
+            / max(self._config.quarantine_threshold, 0.01),
+        )
 
         return AnomalyResult(
             is_anomaly=is_anomaly,

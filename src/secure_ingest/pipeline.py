@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .anomaly import SemanticAnomalyDetector
+from .anomaly import AnomalyConfig, SemanticAnomalyDetector
 from .budget import BudgetExhaustedError, CycleDetectedError, RequestBudget
 from .parser import ContentParser
 from .structure import StructureMonitor, StructureViolationError
@@ -82,13 +82,17 @@ class IngestionPipeline:
         parser: ContentParser | None = None,
         validator: SchemaValidator | None = None,
         anomaly_detector: SemanticAnomalyDetector | None = None,
+        anomaly_config: AnomalyConfig | None = None,
         budget: RequestBudget | None = None,
         structure_monitor: StructureMonitor | None = None,
     ) -> None:
         self._trust = trust_boundary or TrustBoundary()
         self._parser = parser or ContentParser()
         self._validator = validator or SchemaValidator()
-        self._anomaly = anomaly_detector or SemanticAnomalyDetector()
+        if anomaly_detector is not None:
+            self._anomaly = anomaly_detector
+        else:
+            self._anomaly = SemanticAnomalyDetector(config=anomaly_config)
         self._budget = budget
         self._structure = structure_monitor
 
