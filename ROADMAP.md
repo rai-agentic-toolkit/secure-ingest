@@ -60,7 +60,7 @@ The hash is computed on the *parsed, normalized representation* — not the raw 
 
 ## v3.0.0 — Architecture
 
-### 🔴 Refactor monolithic `parse()` into composable pipeline stages
+### ✅ Refactor monolithic `parse()` into composable pipeline stages
 
 `parse()` is 200+ lines with 9 parameters and 6 internal phases: admission, size/type enforcement, value rules, structural parsing, schema validation, semantic validation. Every new feature has been bolted on. This is where future bugs will accumulate.
 
@@ -77,7 +77,22 @@ _promote_taint(result) -> ParseResult
 
 Each stage is independently testable. `parse()` becomes an orchestrator of ~15 lines.
 
-### 🟢 Remove `ValidatedPayload` entirely *(follows 2.2.0 deprecation)*
+### ✅ Remove `ValidatedPayload` entirely *(follows 2.2.0 deprecation)*
+
+---
+
+## v3.1.0 / Future Ideas
+
+These items are prioritized carefully to add high-leverage functionality while strictly avoiding framework bloat or heavy external dependencies.
+
+### 🟡 Standardized Caching Interface
+We currently define `content_hash` as a structural fingerprint for deduplication. Adding a simple `CacheStorage` Protocol to the `IngestionPipeline` would allow users to plug in Redis or an LRU cache, bypassing expensive downstream agent calls entirely if the semantic content hasn't changed.
+
+### 🟢 OpenTelemetry (OTLP) / Prometheus Exporters
+`ReliabilityProfiler` keeps track of anomalies and rejections in memory. Adding a lightweight, optional export module to emit these counters to standard observability stacks (Datadog/Prometheus) would be huge for production teams monitoring their AI ingestion pipelines, without bloating the core parsing logic.
+
+### 🟢 Budget Exhaustion Callbacks
+When a `RequestBudget` is blown, it raises an error and returns a rejected `IngestResult`. Firing a customizable callback *right before* rejection would allow developers to trigger alerts, log specific contexts, or gracefully degrade the agent without needing to wrap the whole pipeline in massive `try/except` blocks.
 
 ---
 

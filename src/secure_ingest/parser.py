@@ -772,7 +772,197 @@ def _parse_xml(
     )
 
 
-# --- Public API ---
+def _admit(
+    content: str | bytes,
+    content_type: ContentType,
+    policy: StrictPolicy | None,
+) -> tuple[str | bytes, str]:
+    """Check admission criteria like size limits and type restrictions.
+
+    Returns the raw string/byte payload and its precomputed SHA-256 raw hash.
+    """
+    if policy is not None:
+        if content_type not in policy.allowed_types:
+            raise PolicyTypeError(
+                attempted=content_type.value,
+                allowed=[t.value for t in policy.allowed_types],
+            )
+        max_size = policy.max_size_bytes
+    else:
+        max_size = _MAX_SIZE_BYTES
+
+    raw_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
+    size_bytes = len(raw_bytes)
+    _raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+    if size_bytes > max_size:
+        raise SizeExceededError(limit=max_size, actual=size_bytes, content_type=content_type.value)
+
+    return content, _raw_hash
+
+
+def _parse_structure(
+    content: str | bytes,
+    content_type: ContentType,
+    strict: bool,
+    patterns: PatternRegistry | None,
+    max_depth: int | None,
+    mutation_mode: str,
+) -> ParseResult:
+    """Route content to the appropriate structural parser."""
+    check_injections = mutation_mode != "IGNORE"
+    compiled_patterns = patterns.get_patterns() if patterns is not None else None
+
+    if content_type == ContentType.JSON:
+        return _parse_json(content, strict=strict, patterns=compiled_patterns, max_depth=max_depth)
+    elif content_type == ContentType.TEXT:
+        return _parse_text(content, strip_injections=check_injections, patterns=compiled_patterns)
+    elif content_type == ContentType.MARKDOWN:
+        return _parse_markdown(
+            content, strip_injections=check_injections, patterns=compiled_patterns
+        )
+    elif content_type == ContentType.YAML:
+        return _parse_yaml(content, strict=strict, patterns=compiled_patterns, max_depth=max_depth)
+    elif content_type == ContentType.XML:
+        return _parse_xml(content, strict=strict, patterns=compiled_patterns, max_depth=max_depth)
+
+
+def _check_value_rules(result: ParseResult, policy: StrictPolicy | None) -> ParseResult:
+    """Enforce allow/deny regular expression rules against parsed values."""
+    if policy is None or not policy.value_rules:
+        return result
+
+    violations = []
+    allow_rules = [r for r in policy.value_rules if r.action == "ALLOW"]
+    deny_rules = [r for r in policy.value_rules if r.action == "DENY"]
+    allow_matched = {r.name: False for r in allow_rules}
+
+    def _scan_vals(obj: Any, path: str = "root") -> None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                _scan_vals(v, f"{path}.{k}")
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                _scan_vals(v, f"{path}[{i}]")
+        elif isinstance(obj, str):
+            for rule in deny_rules:
+                if rule.compiled.search(obj):
+                    violations.append(f"policy_deny:{rule.name} at {path}")
+            for rule in allow_rules:
+                if rule.compiled.search(obj):
+                    allow_matched[rule.name] = True
+
+    _scan_vals(result.content)
+
+    for rule in allow_rules:
+        if not allow_matched[rule.name]:
+            violations.append(f"policy_allow:{rule.name} missed in content")
+
+    if violations:
+        raise ParseError(
+            f"Content denied by StrictPolicy value rules: {', '.join(violations)}",
+            content_type=result.content_type.value,
+            violations=violations,
+        )
+
+    return result
+
+
+def _validate_schema(
+    result: ParseResult,
+    schema: type[BaseModel] | None,
+    raw_hash: str,
+) -> ParseResult:
+    """Validate parsed structure against a Pydantic schema."""
+    if schema is None or not isinstance(result.content, dict):
+        return result
+
+    try:
+        parsed_model = schema.model_validate(
+            result.content, strict=schema.model_config.get("strict", False)
+        )
+        # Deep-freeze: recursively wrap all nested dicts in MappingProxyType
+        # so no nested structure can be mutated after VALIDATED promotion.
+        frozen_content = _deep_freeze(parsed_model.model_dump())
+        return ParseResult(
+            content=frozen_content,
+            content_type=result.content_type,
+            sanitized=result.sanitized,
+            warnings=result.warnings,
+            stripped=result.stripped,
+            taint=TaintLevel.VALIDATED,
+            provenance=result.provenance,
+            chain_id=result.chain_id,
+            content_hash=content_hash_of(result.content),
+            raw_hash=raw_hash,
+        )
+    except ValidationError as e:
+        raise SchemaValidationError(
+            pydantic_errors=e.errors(),  # type: ignore[arg-type]
+            content_type=result.content_type.value,
+        ) from e
+
+
+def _run_semantic(
+    result: ParseResult,
+    semantic_scanner: BaseSemanticScanner | None,
+    policy: StrictPolicy | None,
+) -> ParseResult:
+    """Run semantic scanners over the parsed representation."""
+    _all_semantic_validators: list[SemanticValidator] = []
+    if semantic_scanner is not None:
+        _all_semantic_validators.append(semantic_scanner)  # type: ignore[arg-type]
+    if policy is not None:
+        _all_semantic_validators.extend(policy.semantic_validators)
+
+    if not _all_semantic_validators:
+        return result
+
+    # Build a text representation to validate against
+    if isinstance(result.content, str):
+        _text_repr = result.content
+    else:
+        _text_repr = json.dumps(
+            dict(result.content)
+            if isinstance(result.content, types.MappingProxyType)
+            else result.content,
+            default=str,
+        )
+
+    new_warnings = list(result.warnings)
+    new_stripped = list(result.stripped)
+    rejected_by: list[str] = []
+
+    for validator in _all_semantic_validators:
+        # Support both old scan() interface and new validate() Protocol
+        if hasattr(validator, "validate"):
+            passed = validator.validate(_text_repr)
+            if not passed:
+                rejected_by.append(type(validator).__name__)
+        elif hasattr(validator, "scan"):
+            # Legacy BaseSemanticScanner with scan() returning violation list
+            violations = validator.scan(_text_repr)
+            if violations:
+                new_warnings.extend([f"semantic_violation:{v}" for v in violations])
+                new_stripped.extend(violations)
+
+    if rejected_by:
+        raise SemanticRejectedError(
+            rejected_by=rejected_by, content_type=result.content_type.value
+        )
+
+    return ParseResult(
+        content=result.content,
+        content_type=result.content_type,
+        sanitized=result.sanitized,
+        warnings=new_warnings,
+        stripped=new_stripped,
+        taint=result.taint,
+        provenance=result.provenance,
+        chain_id=result.chain_id,
+        content_hash=result.content_hash,
+        raw_hash=result.raw_hash,
+    )
 
 
 def parse(
@@ -788,7 +978,11 @@ def parse(
     policy: StrictPolicy | None = None,
     mutation_mode: str = "IGNORE",
 ) -> ParseResult:
-    """Parse and sanitize content for safe agent ingestion."""
+    """Parse and sanitize content for safe agent ingestion.
+
+    This function acts as an orchestrator, passing the content through
+    a series of linear, independently verifiable stages.
+    """
     if isinstance(content_type, str):
         try:
             content_type = ContentType(content_type.lower())
@@ -797,207 +991,56 @@ def parse(
                 f"Unsupported content type: {content_type}", violations=["unsupported_type"]
             ) from err
 
-    # --- StrictPolicy enforcement (structural, before any parsing) ---
-    if policy is not None:
-        if content_type not in policy.allowed_types:
-            raise PolicyTypeError(
-                attempted=content_type.value,
-                allowed=[t.value for t in policy.allowed_types],
-            )
+    # Stage 1: Admission (size and type bounds)
+    raw_content, raw_hash = _admit(content, content_type, policy)
 
-        _structured_types = {ContentType.JSON, ContentType.YAML, ContentType.XML}
-        if content_type in _structured_types and policy.schema is not None and schema is None:
-            schema = policy.schema
+    # Resolve active patterns and settings from policy overrides
+    active_patterns = policy.patterns if policy and policy.patterns else patterns
+    active_mutation = policy.mutation_mode if policy else mutation_mode
+    active_depth = policy.max_depth if policy else None
+    active_chain_id = chain_id or uuid.uuid4().hex[:12]
 
-        max_size = policy.max_size_bytes
-    else:
-        max_size = _MAX_SIZE_BYTES
+    # Stage 2: Structural Parsing & Injection Stripping
+    result = _parse_structure(
+        content=raw_content,
+        content_type=content_type,
+        strict=strict,
+        patterns=active_patterns,
+        max_depth=active_depth,
+        mutation_mode=active_mutation,
+    )
 
-    raw_bytes = content if isinstance(content, bytes) else content.encode("utf-8")
-    size_bytes = len(raw_bytes)
-    _raw_hash = hashlib.sha256(raw_bytes).hexdigest()
-    if size_bytes > max_size:
-        raise SizeExceededError(limit=max_size, actual=size_bytes, content_type=content_type.value)
-
-    if policy is not None:
-        if policy.patterns is not None:
-            patterns = policy.patterns
-
-        mutation_mode = policy.mutation_mode
-
-    check_injections = mutation_mode != "IGNORE"
-
-    # Resolve patterns to compiled list (None = use module defaults)
-    compiled_patterns = patterns.get_patterns() if patterns is not None else None
-
-    # Generate chain_id if not provided
-    if not chain_id:
-        chain_id = uuid.uuid4().hex[:12]
-
-    # Override max depth if policy specifies it
-    if policy is not None and policy.max_depth is not None:
-        # Temporarily patch the module-level depth for this call
-        _override_depth = policy.max_depth
-    else:
-        _override_depth = None
-
-    if content_type == ContentType.JSON:
-        result = _parse_json(
-            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
-        )
-    elif content_type == ContentType.TEXT:
-        result = _parse_text(
-            content, strip_injections=check_injections, patterns=compiled_patterns
-        )
-    elif content_type == ContentType.MARKDOWN:
-        result = _parse_markdown(
-            content, strip_injections=check_injections, patterns=compiled_patterns
-        )
-    elif content_type == ContentType.YAML:
-        result = _parse_yaml(
-            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
-        )
-    elif content_type == ContentType.XML:
-        result = _parse_xml(
-            content, strict=strict, patterns=compiled_patterns, max_depth=_override_depth
-        )
-    else:
-        raise ParseError(
-            f"Unsupported content type: {content_type}", violations=["unsupported_type"]
-        )
-
-    if mutation_mode == "REJECT" and result.stripped:
+    if active_mutation == "REJECT" and result.stripped:
         raise ParseError(
             "Content denied by StrictPolicy: injection pattern matched",
             content_type=content_type.value,
             violations=[f"policy_pattern:{pat}" for pat in result.stripped],
         )
 
-    # Determine taint level
-    taint = TaintLevel.SANITIZED
-
-    # Schema validation (only for structured types that produce dicts)
-    if schema is not None and isinstance(result.content, dict):
-        try:
-            parsed_model = schema.model_validate(
-                result.content, strict=schema.model_config.get("strict", False)
-            )
-            # Deep-freeze: recursively wrap all nested dicts in MappingProxyType
-            # so no nested structure can be mutated after VALIDATED promotion.
-            frozen_content = _deep_freeze(parsed_model.model_dump())
-            result = ParseResult(
-                content=frozen_content,
-                content_type=result.content_type,
-                sanitized=result.sanitized,
-                warnings=result.warnings,
-                stripped=result.stripped,
-                taint=taint,
-                provenance=provenance,
-                chain_id=chain_id,
-                content_hash=content_hash_of(result.content),
-                raw_hash=_raw_hash,
-            )
-            taint = TaintLevel.VALIDATED
-        except ValidationError as e:
-            raise SchemaValidationError(
-                pydantic_errors=e.errors(),  # type: ignore[arg-type]
-                content_type=content_type.value,
-            ) from e
-
-    # Collect semantic validators: explicit arg + policy-level validators
-    _all_semantic_validators: list[SemanticValidator] = []
-    if semantic_scanner is not None:
-        _all_semantic_validators.append(semantic_scanner)  # type: ignore[arg-type]
-    if policy is not None:
-        _all_semantic_validators.extend(policy.semantic_validators)
-
-    if _all_semantic_validators:
-        # Build a text representation to validate against
-        if isinstance(result.content, str):
-            _text_repr = result.content
-        else:
-            _text_repr = json.dumps(
-                dict(result.content)
-                if isinstance(result.content, types.MappingProxyType)
-                else result.content,
-                default=str,
-            )
-        new_warnings = list(result.warnings)
-        new_stripped = list(result.stripped)
-        rejected_by: list[str] = []
-        for validator in _all_semantic_validators:
-            # Support both old scan() interface and new validate() Protocol
-            if hasattr(validator, "validate"):
-                passed = validator.validate(_text_repr)
-                if not passed:
-                    rejected_by.append(type(validator).__name__)
-            elif hasattr(validator, "scan"):
-                # Legacy BaseSemanticScanner with scan() returning violation list
-                violations = validator.scan(_text_repr)
-                if violations:
-                    new_warnings.extend([f"semantic_violation:{v}" for v in violations])
-                    new_stripped.extend(violations)
-        if rejected_by:
-            raise SemanticRejectedError(rejected_by=rejected_by, content_type=content_type.value)
-        result = ParseResult(
-            content=result.content,
-            content_type=result.content_type,
-            sanitized=result.sanitized,
-            warnings=new_warnings,
-            stripped=new_stripped,
-            taint=result.taint,
-            provenance=result.provenance,
-            chain_id=result.chain_id,
-            content_hash=result.content_hash,
-        )
-
-    # ValueRule enforcement (after parsing structure)
-    if policy is not None and policy.value_rules:
-        violations = []
-        allow_rules = [r for r in policy.value_rules if r.action == "ALLOW"]
-        deny_rules = [r for r in policy.value_rules if r.action == "DENY"]
-        allow_matched = {r.name: False for r in allow_rules}
-
-        def _scan_vals(obj: Any, path: str = "root") -> None:
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    _scan_vals(v, f"{path}.{k}")
-            elif isinstance(obj, list):
-                for i, v in enumerate(obj):
-                    _scan_vals(v, f"{path}[{i}]")
-            elif isinstance(obj, str):
-                for rule in deny_rules:
-                    if rule.compiled.search(obj):
-                        violations.append(f"policy_deny:{rule.name} at {path}")
-                for rule in allow_rules:
-                    if rule.compiled.search(obj):
-                        allow_matched[rule.name] = True
-
-        _scan_vals(result.content)
-
-        for rule in allow_rules:
-            if not allow_matched[rule.name]:
-                violations.append(f"policy_allow:{rule.name} missed in content")
-
-        if violations:
-            raise ParseError(
-                f"Content denied by StrictPolicy value rules: {', '.join(violations)}",
-                content_type=content_type.value,
-                violations=violations,
-            )
-
-    return ParseResult(
+    # Attach initial metadata
+    result = ParseResult(
         content=result.content,
         content_type=result.content_type,
         sanitized=result.sanitized,
         warnings=result.warnings,
         stripped=result.stripped,
-        taint=taint,
+        taint=TaintLevel.SANITIZED,
         provenance=provenance,
-        chain_id=chain_id,
+        chain_id=active_chain_id,
         content_hash=content_hash_of(result.content),
-        raw_hash=_raw_hash,
+        raw_hash=raw_hash,
     )
+
+    # Stage 3: Schema Validation & Type Promotion
+    result = _validate_schema(result, schema, raw_hash)
+
+    # Stage 4: Semantic Analysis
+    result = _run_semantic(result, semantic_scanner, policy)
+
+    # Stage 5: Value Rules Enforcement
+    result = _check_value_rules(result, policy)
+
+    return result
 
 
 @dataclass
