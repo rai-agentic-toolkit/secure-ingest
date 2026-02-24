@@ -17,6 +17,7 @@ Informed by:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -65,6 +66,9 @@ class BudgetConfig:
     max_cycle_repeats: int = 2
     min_cycle_length: int = 2
     max_cycle_length: int = 8
+    on_exhausted_callback: (
+        Callable[[BudgetExhaustedError | CycleDetectedError, dict[str, Any]], None] | None
+    ) = None
 
     def __post_init__(self) -> None:
         if self.max_calls is not None and self.max_calls < 1:
@@ -116,32 +120,45 @@ class RequestBudget:
         Raises BudgetExhaustedError if any call-count ceiling is exceeded.
         Raises CycleDetectedError if a repeating cycle pattern is found.
         """
-        # Check total calls BEFORE recording (fail-closed: don't let it through)
-        new_total = self.total_calls + 1
-        if self.config.max_calls is not None and new_total > self.config.max_calls:
-            raise BudgetExhaustedError("total_calls", self.config.max_calls, new_total)
+        try:
+            # Check total calls BEFORE recording (fail-closed: don't let it through)
+            new_total = self.total_calls + 1
+            if self.config.max_calls is not None and new_total > self.config.max_calls:
+                raise BudgetExhaustedError("total_calls", self.config.max_calls, new_total)
 
-        # Check per-tool calls
-        new_tool_count = self._tool_counts.get(tool_name, 0) + 1
-        if (
-            self.config.max_calls_per_tool is not None
-            and new_tool_count > self.config.max_calls_per_tool
-        ):
-            raise BudgetExhaustedError(
-                f"calls_per_tool:{tool_name}",
-                self.config.max_calls_per_tool,
-                new_tool_count,
-            )
+            # Check per-tool calls
+            new_tool_count = self._tool_counts.get(tool_name, 0) + 1
+            if (
+                self.config.max_calls_per_tool is not None
+                and new_tool_count > self.config.max_calls_per_tool
+            ):
+                raise BudgetExhaustedError(
+                    f"calls_per_tool:{tool_name}",
+                    self.config.max_calls_per_tool,
+                    new_tool_count,
+                )
 
-        # Record the call
-        self._call_sequence.append(tool_name)
-        self._tool_counts[tool_name] = new_tool_count
+            # Record the call
+            self._call_sequence.append(tool_name)
+            self._tool_counts[tool_name] = new_tool_count
 
-        # Check for cycles after recording
-        cycle = self._detect_cycle()
-        if cycle is not None:
-            pattern, count = cycle
-            raise CycleDetectedError(pattern, count)
+            # Check for cycles after recording
+            cycle = self._detect_cycle()
+            if cycle is not None:
+                pattern, count = cycle
+                raise CycleDetectedError(pattern, count)
+
+        except (BudgetExhaustedError, CycleDetectedError) as e:
+            if self.config.on_exhausted_callback:
+                try:
+                    self.config.on_exhausted_callback(e, self.snapshot())
+                except Exception as cb_err:
+                    import warnings
+
+                    warnings.warn(
+                        f"Budget callback failed: {cb_err}", RuntimeWarning, stacklevel=2
+                    )
+            raise
 
     def _detect_cycle(self) -> tuple[tuple[str, ...], int] | None:
         """Detect repeating patterns in the call sequence.

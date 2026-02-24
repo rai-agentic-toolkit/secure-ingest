@@ -251,6 +251,56 @@ class TestErrors:
         assert str(err) == "custom cycle msg"
 
 
+# --- Callbacks ---
+
+
+class TestBudgetCallbacks:
+    def test_callback_invoked_on_budget_exhausted(self):
+        fired = False
+        captured_err = None
+        captured_snap = None
+
+        def my_cb(err, snap):
+            nonlocal fired, captured_err, captured_snap
+            fired = True
+            captured_err = err
+            captured_snap = snap
+
+        b = RequestBudget(BudgetConfig(max_calls=2, on_exhausted_callback=my_cb))
+        b.record("a")
+        b.record("b")
+        with pytest.raises(BudgetExhaustedError):
+            b.record("c")
+
+        assert fired is True
+        assert isinstance(captured_err, BudgetExhaustedError)
+        assert captured_err.budget_type == "total_calls"
+        assert captured_snap["total_calls"] == 2
+        assert captured_snap["call_sequence"] == ["a", "b"]
+
+    def test_callback_invoked_on_cycle_detected(self):
+        fired = False
+        captured_err = None
+
+        def my_cb(err, snap):
+            nonlocal fired, captured_err
+            fired = True
+            captured_err = err
+
+        b = RequestBudget(
+            BudgetConfig(max_cycle_repeats=1, min_cycle_length=2, on_exhausted_callback=my_cb)
+        )
+        b.record("a")
+        b.record("b")
+        b.record("a")
+        with pytest.raises(CycleDetectedError):
+            b.record("b")
+
+        assert fired is True
+        assert isinstance(captured_err, CycleDetectedError)
+        assert captured_err.cycle == ("a", "b")
+
+
 def make_policy(**kwargs):
     from secure_ingest import ContentType, StrictPolicy
 
