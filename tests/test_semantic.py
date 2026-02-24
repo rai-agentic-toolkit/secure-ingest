@@ -173,3 +173,28 @@ def test_validated_content_is_read_only():
     result = parse('{"name": "Bob"}', ContentType.JSON, schema=UserSchema)
     with pytest.raises(TypeError):
         result.content["name"] = "hacked"  # type: ignore[index]
+
+
+def test_deeply_frozen_content_serializes_correctly():
+    """Verify that nested MappingProxyType objects are correctly serialized to JSON."""
+    from pydantic import BaseModel
+
+    class Nested(BaseModel):
+        foo: str
+
+    class DeepSchema(BaseModel):
+        inner: Nested
+
+    class InspectJSONValidator:
+        def validate(self, payload: str) -> bool:
+            # Ensure the nested structure was properly encoded as JSON,
+            # not fallback stringified into 'mappingproxy(...)'
+            import json
+
+            parsed = json.loads(payload)
+            return isinstance(parsed.get("inner"), dict) and parsed["inner"].get("foo") == "bar"
+
+    policy = _make_policy(semantic_validators=(InspectJSONValidator(),))
+
+    result = parse('{"inner": {"foo": "bar"}}', ContentType.JSON, schema=DeepSchema, policy=policy)
+    assert result.taint == TaintLevel.VALIDATED
