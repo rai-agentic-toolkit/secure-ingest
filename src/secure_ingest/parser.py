@@ -192,10 +192,12 @@ class ParseResult:
     raw_hash: str | None = None
 
     def verify(self) -> bool:
-        """Verify content integrity against the stored hash.
+        """Verify structural integrity against the stored content_hash.
 
-        Returns True if the content hash matches, False if it doesn't.
+        Returns True if the structural fingerprint matches, False if it doesn't.
         Returns True if no hash was set (backwards compatibility).
+        Note: This verifies the parsed representation (`content_hash`), not
+        the wire bytes (`raw_hash`).
         """
         if not self.content_hash:
             return True

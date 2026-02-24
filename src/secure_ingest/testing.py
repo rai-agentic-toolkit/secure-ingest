@@ -44,6 +44,7 @@ def make_validated_result(
     provenance: str = "testing",
     chain_id: str | None = None,
     warnings: list[str] | None = None,
+    raw_hash: str | None = None,
 ) -> ParseResult:
     """Build a ``ParseResult`` with ``TaintLevel.VALIDATED`` without parsing.
 
@@ -71,6 +72,7 @@ def make_validated_result(
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
         content_hash=content_hash_of(content),
+        raw_hash=raw_hash,
     )
 
 
@@ -82,6 +84,7 @@ def make_sanitized_result(
     chain_id: str | None = None,
     warnings: list[str] | None = None,
     stripped: list[str] | None = None,
+    raw_hash: str | None = None,
 ) -> ParseResult:
     """Build a ``ParseResult`` with ``TaintLevel.SANITIZED`` without parsing.
 
@@ -109,4 +112,5 @@ def make_sanitized_result(
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
         content_hash=content_hash_of(content),
+        raw_hash=raw_hash,
     )
