@@ -8,7 +8,6 @@ from .budget import (
     CycleDetectedError,
     RequestBudget,
 )
-from .llm import ValidatedPayload
 from .parser import (
     BUILTIN_PATTERNS,
     ContentType,
@@ -48,7 +47,7 @@ from .structure import (
     ToolGraph,
 )
 
-__version__ = "2.1.0"
+__version__ = "3.0.0"
 __all__ = [
     # Core parse API
     "parse",
@@ -99,6 +98,4 @@ __all__ = [
     "ReliabilityProfiler",
     "ReliabilityReport",
     "DimensionScore",
-    # LLM helpers
-    "ValidatedPayload",
 ]
