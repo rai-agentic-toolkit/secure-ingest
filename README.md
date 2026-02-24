@@ -103,7 +103,7 @@ Every `ParseResult` carries a taint level — the trust state of the content:
 Use type enforcements to explicitly require validated payloads in your application functions:
 
 ```python
-from secure_ingest import parse, ValidatedPayload, ContentType
+from secure_ingest import parse, ParseResult, ContentType
 from pydantic import BaseModel
 import openai
 
@@ -111,21 +111,18 @@ class UserPrompt(BaseModel):
     user_id: int
     query: str
 
-def call_llm(payload: ValidatedPayload):
-    # The type signature enforces that only validated payloads are accepted
+def call_llm(payload: ParseResult):
+    # The type signature enforces that only parsed results are accepted.
+    # We can guarantee it's validated payload using the decorator @require_validated
+    # or by calling .as_validated() when passing it in.
     return openai.ChatCompletion.create(
-        model=\"gpt-4\",
-        messages=[{\"role\": \"user\", \"content\": str(payload.content)}]
+        model="gpt-4",
+        messages=[{"role": "user", "content": str(payload.content)}]
     )
 
-raw_input = '{\"user_id\": 123, \"query\": \"hello\"}'
-result = parse(raw_input, ContentType.JSON, schema=UserPrompt)
-
-safe_payload = ValidatedPayload(
-    content=result.content,
-    content_type=result.content_type,
-    chain_id=result.chain_id
-)
+raw_input = '{"user_id": 123, "query": "hello"}'
+# .as_validated() will raise a ParseError if the schema validation failed
+safe_payload = parse(raw_input, ContentType.JSON, schema=UserPrompt).as_validated()
 
 call_llm(safe_payload)
 ```

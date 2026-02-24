@@ -52,15 +52,15 @@ async def analyze_document(request: Request):
             detail=f"SECURITY INCIDENT: The payload was structurally rejected. Reason: {str(e)}"
         )
 
-    # 4. Extract strict, validated Pydantic model
-    validated_data: AnalysisPayload = result.content
+    # 4. Extract strict, validated data (frozen dictionary matching the schema)
+    validated_data = result.content
 
     # 5. Execute Core Business Logic safely (Bare Metal)
     response = await openai.ChatCompletion.acreate(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "Analyze this user document."},
-            {"role": "user", "content": validated_data.raw_text}
+            {"role": "user", "content": validated_data["raw_text"]}
         ]
     )
 
