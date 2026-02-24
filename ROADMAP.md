@@ -91,7 +91,7 @@ We currently define `content_hash` as a structural fingerprint for deduplication
 ### 🟢 OpenTelemetry (OTLP) / Prometheus Exporters
 `ReliabilityProfiler` keeps track of anomalies and rejections in memory. Adding a lightweight, optional export module to emit these counters to standard observability stacks (Datadog/Prometheus) would be huge for production teams monitoring their AI ingestion pipelines, without bloating the core parsing logic.
 
-### 🟢 Budget Exhaustion Callbacks
+### ✅ Budget Exhaustion Callbacks
 When a `RequestBudget` is blown, it raises an error and returns a rejected `IngestResult`. Firing a customizable callback *right before* rejection would allow developers to trigger alerts, log specific contexts, or gracefully degrade the agent without needing to wrap the whole pipeline in massive `try/except` blocks.
 
 ---
