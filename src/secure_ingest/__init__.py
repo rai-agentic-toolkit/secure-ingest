@@ -1,5 +1,6 @@
 """secure-ingest: Strict payload hygiene and validation gateway for Python."""
 
+from .anomaly import AnomalyConfig, SemanticAnomalyDetector
 from .async_parse import AsyncSemanticValidator, parse_async
 from .budget import (
     BudgetConfig,
@@ -23,6 +24,7 @@ from .parser import (
     SizeExceededError,
     StrictPolicy,
     TaintLevel,
+    content_hash_of,
     parse,
     # Trust enforcement
     require_validated,
@@ -59,6 +61,7 @@ __all__ = [
     "InjectionPattern",
     "PatternRegistry",
     "BUILTIN_PATTERNS",
+    "content_hash_of",
     # Exception hierarchy
     "ParseError",
     "SizeExceededError",
@@ -87,6 +90,8 @@ __all__ = [
     "CycleDetectedError",
     "IngestionPipeline",
     "IngestResult",
+    "AnomalyConfig",
+    "SemanticAnomalyDetector",
     "ToolGraph",
     "StructureMonitor",
     "StructureViolationError",

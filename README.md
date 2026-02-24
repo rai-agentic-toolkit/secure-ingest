@@ -54,6 +54,30 @@ optionally validates against Pydantic schemas, and freezes content once validate
 - **Strict Typing** — uses Pydantic to tightly control data shapes
 - **Immutable on VALIDATED** — `result.content` becomes a read-only `MappingProxyType` after schema validation
 
+## Core API vs Pipeline API
+
+`secure-ingest` offers two entry points depending on your needs:
+
+1. **`parse(...)`** (Core API)
+   A pure, stateless function. It performs structural validation, payload truncation, and schema checking. Use this when you just want to guarantee that a payload matches a Pydantic schema and isn't a zip bomb or million-token DOS attack. It is fast and has zero dependencies outside of standard Python and Pydantic.
+
+2. **`IngestionPipeline(...)`** (Advanced API)
+   A stateful pipeline built *on top* of `parse()`. It adds:
+   - **Semantic Anomaly Detection** (prompt injection heuristics)
+   - **Request Budgets** (rate limiting and infinite-loop breaking)
+   - **Graph Traversal Limits** (preventing infinite tool-call cycles)
+   - **Trust Decisions** (explicit Accept/Quarantine/Reject routing)
+   Use the pipeline when ingesting content directly into an autonomous agent or executing function calls.
+
+   *Anomaly thresholds can be tuned when constructing the pipeline:*
+   ```python
+   from secure_ingest import IngestionPipeline, AnomalyConfig
+
+   # Stricter thresholds for highly sensitive agents
+   config = AnomalyConfig(quarantine_threshold=0.3, reject_threshold=0.6)
+   pipeline = IngestionPipeline(anomaly_config=config)
+   ```
+
 ## Content Types
 
 | Type | Key Security Features |
@@ -114,10 +138,11 @@ Track where content came from and verify it hasn't been tampered with:
 result = parse(content, ContentType.JSON, provenance=\"api.example.com/v1/data\")
 print(result.provenance)     # 'api.example.com/v1/data'
 print(result.chain_id)       # auto-generated correlation ID
-print(result.content_hash)   # SHA-256 digest of parsed content
+print(result.content_hash)   # structural fingerprint (for deduplication)
+print(result.raw_hash)       # strict SHA-256 of unparsed input bytes
 
 # Verify integrity downstream
-assert result.verify()  # True if content matches stored hash
+assert result.verify()  # True if structural fingerprint exactly matches content
 ```
 
 ## Policy Enforcement

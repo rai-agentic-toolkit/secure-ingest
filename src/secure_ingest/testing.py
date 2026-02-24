@@ -21,23 +21,11 @@ Usage::
 
 from __future__ import annotations
 
-import hashlib
-import json
 import types
 import uuid
 from typing import Any
 
-from .parser import ContentType, ParseResult, TaintLevel
-
-
-def _hash(content: dict[str, Any] | Any) -> str:
-    if isinstance(content, str):
-        raw = content.encode("utf-8")
-    elif isinstance(content, bytes):
-        raw = content
-    else:
-        raw = json.dumps(content, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+from .parser import ContentType, ParseResult, TaintLevel, content_hash_of
 
 
 def _deep_freeze(content: dict[str, Any] | Any) -> Any:
@@ -56,6 +44,7 @@ def make_validated_result(
     provenance: str = "testing",
     chain_id: str | None = None,
     warnings: list[str] | None = None,
+    raw_hash: str | None = None,
 ) -> ParseResult:
     """Build a ``ParseResult`` with ``TaintLevel.VALIDATED`` without parsing.
 
@@ -82,7 +71,8 @@ def make_validated_result(
         taint=TaintLevel.VALIDATED,
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
-        content_hash=_hash(content),
+        content_hash=content_hash_of(content),
+        raw_hash=raw_hash,
     )
 
 
@@ -94,6 +84,7 @@ def make_sanitized_result(
     chain_id: str | None = None,
     warnings: list[str] | None = None,
     stripped: list[str] | None = None,
+    raw_hash: str | None = None,
 ) -> ParseResult:
     """Build a ``ParseResult`` with ``TaintLevel.SANITIZED`` without parsing.
 
@@ -120,5 +111,6 @@ def make_sanitized_result(
         taint=TaintLevel.SANITIZED,
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
-        content_hash=_hash(content),
+        content_hash=content_hash_of(content),
+        raw_hash=raw_hash,
     )
