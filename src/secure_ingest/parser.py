@@ -922,12 +922,13 @@ def _run_semantic(
     if isinstance(result.content, str):
         _text_repr = result.content
     else:
-        _text_repr = json.dumps(
-            dict(result.content)
-            if isinstance(result.content, types.MappingProxyType)
-            else result.content,
-            default=str,
-        )
+
+        def _unfreeze_default(obj: Any) -> Any:
+            if isinstance(obj, types.MappingProxyType):
+                return dict(obj)
+            return str(obj)
+
+        _text_repr = json.dumps(result.content, default=_unfreeze_default)
 
     new_warnings = list(result.warnings)
     new_stripped = list(result.stripped)
