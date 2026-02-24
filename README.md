@@ -1,13 +1,39 @@
 # secure-ingest
 
-Strict payload hygiene and validation gateway for Python.
+**A strict payload hygiene and validation gateway for Python.**
 
-Provides a structural validation boundary that enforces size, depth, encoding, and schema
-constraints on untrusted content before it reaches any business logic — AI-adjacent or otherwise.
+> **Project Status:** This is a personal project exploring strict agentic security patterns. The organization name was chosen by my AI agent—there is no VC funding or sales team here, just code.
 
 **Built on Pydantic and defusedxml. Pure Python 3.10+. 458 tests.**
 
 > See [ROADMAP.md](ROADMAP.md) for planned improvements and known architectural gaps.
+
+## Why use this? (Vs. Just Pydantic)
+
+You are likely already using Pydantic to validate that your data matches a specific schema (types, fields, constraints). Pydantic is excellent at ensuring data correctness.
+
+`secure-ingest` is designed to ensure data safety and provenance *before* the schema validation even happens.
+
+> **If Pydantic is the Editor checking your spelling, secure-ingest is the Mailroom Security checking for anthrax.**
+
+| Feature | Pydantic (Standard) | secure-ingest |
+| :--- | :--- | :--- |
+| **Primary Goal** | Schema Validation & Type Coercion | Attack Surface Reduction & Taint Tracking |
+| **DoS Protection** | Vulnerable to massive payloads or "Zip Bombs" (deep nesting) | Enforces strict Size (bytes) and Depth limits before full parsing |
+| **Recursion Limits** | Python's default recursion limit | Configurable depth constraints to prevent stack overflows |
+| **Trust Model** | Binary (Valid vs Invalid) | Taint Tracking (Untrusted &rarr; Sanitized &rarr; Validated) |
+| **Immutability** | Configurable (`frozen=True`) | Enforced (Returns `MappingProxyType` / read-only structures) |
+| **XML Security** | Vulnerable to XXE/Billion Laughs | Uses `defusedxml` by default |
+
+## The Problem it Solves
+
+When building LLM Agents or exposed webhooks, you often accept data from "Untrusted" sources (User input, 3rd party APIs, or hallucinating LLMs).
+
+If you pass a 500MB JSON file or a deeply nested recursive object to a standard parser, your service might crash (OOM or `RecursionError`) before Pydantic ever gets a chance to tell you the schema is wrong.
+
+`secure-ingest` provides a structural validation boundary. It allows you to say:
+
+> *"I will only accept JSON that is under 1MB, has a max nesting depth of 5, and matches this Pydantic schema. Once validated, freeze it so no downstream function can mutate it."*
 
 ## Install
 
@@ -24,20 +50,25 @@ pip install secure-ingest[yaml]
 from secure_ingest import parse, ContentType
 from pydantic import BaseModel
 
-# Parse untrusted JSON — returns validated data with taint level
-result = parse('{\"name\": \"Alice\", \"role\": \"admin\"}', ContentType.JSON)
-print(result.content)    # {'name': 'Alice', 'role': 'admin'}
-print(result.taint)      # TaintLevel.SANITIZED
-print(result.chain_id)   # 'a1b2c3d4e5f6' (correlation ID for tracking)
+# 1. Define your Pydantic Model (The Shape)
+class AgentCommand(BaseModel):
+    tool: str
+    args: dict
 
-# Strict schema validation promotes taint to VALIDATED
-class UserSchema(BaseModel):
-    name: str
-    role: str
+# 2. Parse with Security Constraints (The Physics)
+# This will fail FAST if the payload is too large, too deep, or malformed.
+result = parse(
+    untrusted_payload,
+    ContentType.JSON,
+    schema=AgentCommand,
+    max_depth=5,            # Prevent deep nesting attacks
+    max_size_bytes=10240    # 10KB limit
+)
 
-result = parse('{\"name\": \"Alice\", \"role\": \"admin\"}', ContentType.JSON, schema=UserSchema)
-print(result.taint)      # TaintLevel.VALIDATED
-print(type(result.content))  # <class 'mappingproxy'> — immutable after validation
+# 3. Access the Safe Data
+# Result is TaintLevel.VALIDATED and the content is immutable
+print(result.content)
+# > mappingproxy({'tool': 'search', 'args': mappingproxy({...})})
 ```
 
 ## What It Does
