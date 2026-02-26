@@ -33,6 +33,7 @@ yaml = ["pyyaml>=6.0"]
 dev = [
     "pyyaml>=6.0",
     "pytest>=7.0",
+    "pytest-cov>=4.0",
     "pre-commit>=3.0",
     "ruff>=0.9",
     "mypy>=1.14",
