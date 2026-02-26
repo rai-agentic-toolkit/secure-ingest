@@ -5,31 +5,31 @@ import pytest
 from secure_ingest import (
     ContentType,
     ParseResult,
-    TaintLevel,
+    TrustLevel,
     parse,
 )
 
 
-class TestTaintLevel:
-    """Tests for TaintLevel enum ordering."""
+class TestTrustLevel:
+    """Tests for TrustLevel enum ordering."""
 
     def test_ordering(self):
-        assert TaintLevel.UNTRUSTED < TaintLevel.SANITIZED
-        assert TaintLevel.SANITIZED < TaintLevel.VALIDATED
-        assert TaintLevel.UNTRUSTED < TaintLevel.VALIDATED
+        assert TrustLevel.UNTRUSTED < TrustLevel.SANITIZED
+        assert TrustLevel.SANITIZED < TrustLevel.VALIDATED
+        assert TrustLevel.UNTRUSTED < TrustLevel.VALIDATED
 
     def test_equality(self):
-        assert TaintLevel.SANITIZED == TaintLevel.SANITIZED
-        assert not (TaintLevel.SANITIZED < TaintLevel.SANITIZED)
+        assert TrustLevel.SANITIZED == TrustLevel.SANITIZED
+        assert not (TrustLevel.SANITIZED < TrustLevel.SANITIZED)
 
     def test_ge_le(self):
-        assert TaintLevel.VALIDATED >= TaintLevel.SANITIZED
-        assert TaintLevel.SANITIZED <= TaintLevel.VALIDATED
-        assert TaintLevel.SANITIZED >= TaintLevel.SANITIZED
+        assert TrustLevel.VALIDATED >= TrustLevel.SANITIZED
+        assert TrustLevel.SANITIZED <= TrustLevel.VALIDATED
+        assert TrustLevel.SANITIZED >= TrustLevel.SANITIZED
 
     def test_min_selects_least_trusted(self):
-        levels = [TaintLevel.VALIDATED, TaintLevel.SANITIZED, TaintLevel.UNTRUSTED]
-        assert min(levels) == TaintLevel.UNTRUSTED
+        levels = [TrustLevel.VALIDATED, TrustLevel.SANITIZED, TrustLevel.UNTRUSTED]
+        assert min(levels) == TrustLevel.UNTRUSTED
 
 
 class TestParseTaint:
@@ -37,7 +37,7 @@ class TestParseTaint:
 
     def test_default_taint_is_sanitized(self):
         result = parse("hello", ContentType.TEXT)
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
 
     def test_schema_validation_promotes_to_validated(self):
         from pydantic import BaseModel
@@ -46,11 +46,11 @@ class TestParseTaint:
             name: str
 
         result = parse('{"name": "Alice"}', ContentType.JSON, schema=MySchema)
-        assert result.taint == TaintLevel.VALIDATED
+        assert result.trust_level == TrustLevel.VALIDATED
 
     def test_no_schema_stays_sanitized(self):
         result = parse('{"name": "Alice"}', ContentType.JSON)
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
 
     def test_provenance_passed_through(self):
         result = parse("hello", ContentType.TEXT, provenance="agent-alpha")
@@ -71,22 +71,22 @@ class TestParseTaint:
 
     def test_taint_on_json(self):
         result = parse('{"x": 1}', ContentType.JSON, provenance="src")
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
         assert result.provenance == "src"
 
     def test_taint_on_markdown(self):
         result = parse("# Hello", ContentType.MARKDOWN, provenance="md-src")
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
         assert result.provenance == "md-src"
 
     def test_taint_on_yaml(self):
         result = parse("key: value", ContentType.YAML, provenance="yaml-src")
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
         assert result.provenance == "yaml-src"
 
     def test_taint_on_xml(self):
         result = parse("<root><a>1</a></root>", ContentType.XML, provenance="xml-src")
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
         assert result.provenance == "xml-src"
 
     def test_chain_id_consistent_across_types(self):
@@ -166,12 +166,12 @@ class TestBackwardsCompatibility:
         result = parse("hello", ContentType.TEXT)
         assert result.content == "hello"
         assert result.sanitized is True
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
 
     def test_parse_result_still_frozen(self):
         result = parse("hello", ContentType.TEXT)
         with pytest.raises(AttributeError):
-            result.taint = TaintLevel.UNTRUSTED  # type: ignore
+            result.trust_level = TrustLevel.UNTRUSTED  # type: ignore
 
 
 def make_policy(**kwargs):

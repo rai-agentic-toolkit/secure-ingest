@@ -9,7 +9,7 @@ from secure_ingest import (
     ParseError,
     PatternRegistry,
     StrictPolicy,
-    TaintLevel,
+    TrustLevel,
     ValueRule,
     parse,
 )
@@ -150,7 +150,7 @@ class TestPolicyCombined:
         )
         result = parse('{"name": "Alice"}', "json", policy=policy, schema=MySchema)
         assert result.content == {"name": "Alice"}
-        assert result.taint == TaintLevel.VALIDATED
+        assert result.trust_level == TrustLevel.VALIDATED
 
     def test_strict_policy_rejects_wrong_type(self):
         from pydantic import BaseModel
@@ -169,7 +169,7 @@ class TestPolicyCombined:
         r1 = parse('{"a": 1}', "json")
         r2 = parse('{"a": 1}', "json", policy=None)
         assert r1.content == r2.content
-        assert r1.taint == r2.taint
+        assert r1.trust_level == r2.trust_level
 
 
 class TestValueRules:

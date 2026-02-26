@@ -209,7 +209,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             result = parse_content(content, ct, policy=policy)
             output = {
                 "policy_applied": True,
-                "taint": result.taint.value,
+                "taint": result.trust_level.value,
                 "injections_stripped": len(result.warnings),
                 "warnings": list(result.warnings),
                 "content_hash": result.content_hash,

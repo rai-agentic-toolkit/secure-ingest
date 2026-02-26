@@ -21,11 +21,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 - **`ParseResult.as_validated()`** — raises `ParseError(insufficient_taint)` if taint < VALIDATED, returns self otherwise. Chainable from `parse()`.
 
-- **`@require_validated` decorator** — asserts any `ParseResult` argument has VALIDATED taint. Works on both sync and async (coroutine) functions.
+- **`@require_validated` decorator** — asserts any `ParseResult` argument has VALIDATED trust. Works on both sync and async (coroutine) functions.
 
 - **`secure_ingest.testing` module** — test helpers to construct `ParseResult` fixtures without running the parser:
-  - `make_validated_result(content, ...)` — VALIDATED taint, content deep-frozen
-  - `make_sanitized_result(content, ...)` — SANITIZED taint
+  - `make_validated_result(content, ...)` — VALIDATED trust, content deep-frozen
+  - `make_sanitized_result(content, ...)` — SANITIZED trust
 
 - **`parse_async()` + `AsyncSemanticValidator` Protocol** — async complement to `parse()`. Runs synchronous parsing in a thread executor (no event loop blocking) and concurrently awaits `AsyncSemanticValidator` instances via `asyncio.gather()`.
 

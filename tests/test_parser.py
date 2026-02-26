@@ -293,7 +293,7 @@ class TestParseResult:
             role: str
 
         result = parse('{"name": "Alice", "role": "admin"}', ContentType.JSON, schema=UserSchema)
-        assert result.taint.value == "validated"
+        assert result.trust_level.value == "validated"
         assert isinstance(result.content, types.MappingProxyType)
 
     def test_validated_content_is_read_only(self):

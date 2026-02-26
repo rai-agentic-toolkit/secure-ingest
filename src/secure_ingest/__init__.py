@@ -22,7 +22,7 @@ from .parser import (
     # Exception hierarchy
     SizeExceededError,
     StrictPolicy,
-    TaintLevel,
+    TrustLevel,
     content_hash_of,
     parse,
     # Trust enforcement
@@ -54,7 +54,7 @@ __all__ = [
     "parse_async",
     "ParseResult",
     "ContentType",
-    "TaintLevel",
+    "TrustLevel",
     "StrictPolicy",
     "ValueRule",
     "InjectionPattern",

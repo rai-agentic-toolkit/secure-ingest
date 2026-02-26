@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from secure_ingest import ContentType, SemanticValidator, StrictPolicy, TaintLevel, parse
+from secure_ingest import ContentType, SemanticValidator, StrictPolicy, TrustLevel, parse
 from secure_ingest.semantic import BaseSemanticScanner
 
 # ---------------------------------------------------------------------------
@@ -63,7 +63,7 @@ def test_semantic_validator_is_protocol():
 def test_legacy_scanner_clean_text():
     scanner = LegacyScanner()
     result = parse("Hello world", ContentType.TEXT, semantic_scanner=scanner)
-    assert result.taint == TaintLevel.SANITIZED
+    assert result.trust_level == TrustLevel.SANITIZED
     assert "malicious_intent" not in result.warnings
     assert "malicious_intent" not in result.stripped
 
@@ -71,7 +71,7 @@ def test_legacy_scanner_clean_text():
 def test_legacy_scanner_flagged_text():
     scanner = LegacyScanner()
     result = parse("I have evil intent", ContentType.TEXT, semantic_scanner=scanner)
-    assert result.taint == TaintLevel.SANITIZED
+    assert result.trust_level == TrustLevel.SANITIZED
     assert "semantic_violation:malicious_intent" in result.warnings
     assert "malicious_intent" in result.stripped
 
@@ -79,7 +79,7 @@ def test_legacy_scanner_flagged_text():
 def test_legacy_scanner_json():
     scanner = LegacyScanner()
     result = parse('{"message": "I have evil intent"}', ContentType.JSON, semantic_scanner=scanner)
-    assert result.taint == TaintLevel.SANITIZED
+    assert result.trust_level == TrustLevel.SANITIZED
     assert "semantic_violation:malicious_intent" in result.warnings
     assert "malicious_intent" in result.stripped
 
@@ -102,7 +102,7 @@ def _make_policy(**extra):
 def test_validate_protocol_clean_passes():
     policy = _make_policy(semantic_validators=(DenyEvil(),))
     result = parse("Hello world", ContentType.TEXT, policy=policy)
-    assert result.taint == TaintLevel.SANITIZED
+    assert result.trust_level == TrustLevel.SANITIZED
 
 
 def test_validate_protocol_rejects_payload():
@@ -126,7 +126,7 @@ def test_multiple_validators_both_must_pass():
 def test_multiple_validators_all_pass():
     policy = _make_policy(semantic_validators=(AllowAll(), DenyEvil()))
     result = parse("this is fine content", ContentType.TEXT, policy=policy)
-    assert result.taint == TaintLevel.SANITIZED
+    assert result.trust_level == TrustLevel.SANITIZED
 
 
 def test_compose_merges_semantic_validators():
@@ -160,7 +160,7 @@ def test_validated_content_is_mapping_proxy():
         role: str
 
     result = parse('{"name": "Alice", "role": "admin"}', ContentType.JSON, schema=UserSchema)
-    assert result.taint == TaintLevel.VALIDATED
+    assert result.trust_level == TrustLevel.VALIDATED
     assert isinstance(result.content, types.MappingProxyType)
 
 
@@ -197,4 +197,4 @@ def test_deeply_frozen_content_serializes_correctly():
     policy = _make_policy(semantic_validators=(InspectJSONValidator(),))
 
     result = parse('{"inner": {"foo": "bar"}}', ContentType.JSON, schema=DeepSchema, policy=policy)
-    assert result.taint == TaintLevel.VALIDATED
+    assert result.trust_level == TrustLevel.VALIDATED

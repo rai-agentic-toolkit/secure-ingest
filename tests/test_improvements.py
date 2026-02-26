@@ -22,7 +22,7 @@ from secure_ingest import (
     SemanticRejectedError,
     SizeExceededError,
     StrictPolicy,
-    TaintLevel,
+    TrustLevel,
     parse,
     require_validated,
 )
@@ -139,10 +139,10 @@ class TestAsValidated:
 
     def test_as_validated_on_sanitized_raises(self):
         result = parse("hello", ContentType.TEXT)
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
         with pytest.raises(ParseError) as exc_info:
             result.as_validated()
-        assert "insufficient_taint" in exc_info.value.violations
+        assert "insufficient_trust_level" in exc_info.value.violations
 
     def test_as_validated_chains(self):
         """as_validated() is chainable from parse()."""
@@ -179,7 +179,7 @@ class TestRequireValidated:
         result = parse("hello", ContentType.TEXT)
         with pytest.raises(ParseError) as exc_info:
             handler(result)
-        assert "insufficient_taint" in exc_info.value.violations
+        assert "insufficient_trust_level" in exc_info.value.violations
 
     def test_async_function_passes_with_validated(self):
         class S(BaseModel):
@@ -220,7 +220,7 @@ class TestRequireValidated:
 class TestTestingHelpers:
     def test_make_validated_result_taint(self):
         r = make_validated_result({"name": "Alice"})
-        assert r.taint == TaintLevel.VALIDATED
+        assert r.trust_level == TrustLevel.VALIDATED
 
     def test_make_validated_result_content_is_frozen(self):
         r = make_validated_result({"user": {"role": "admin"}})
@@ -242,7 +242,7 @@ class TestTestingHelpers:
 
     def test_make_sanitized_result_taint(self):
         r = make_sanitized_result("some raw text")
-        assert r.taint == TaintLevel.SANITIZED
+        assert r.trust_level == TrustLevel.SANITIZED
 
     def test_make_sanitized_fails_require_validated(self):
         @require_validated
@@ -275,14 +275,14 @@ class TestParseAsync:
     def test_parse_async_basic(self):
         result = self._run(parse_async("hello", ContentType.TEXT))
         assert result.content == "hello"
-        assert result.taint == TaintLevel.SANITIZED
+        assert result.trust_level == TrustLevel.SANITIZED
 
     def test_parse_async_with_schema(self):
         class S(BaseModel):
             x: int
 
         result = self._run(parse_async('{"x": 1}', ContentType.JSON, schema=S))
-        assert result.taint == TaintLevel.VALIDATED
+        assert result.trust_level == TrustLevel.VALIDATED
         assert result.content["x"] == 1
 
     def test_parse_async_with_accepting_validator(self):

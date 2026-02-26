@@ -25,7 +25,7 @@ import types
 import uuid
 from typing import Any
 
-from .parser import ContentType, ParseResult, TaintLevel, content_hash_of
+from .parser import ContentType, ParseResult, TrustLevel, content_hash_of
 
 
 def _deep_freeze(content: dict[str, Any] | Any) -> Any:
@@ -46,7 +46,7 @@ def make_validated_result(
     warnings: list[str] | None = None,
     raw_hash: str | None = None,
 ) -> ParseResult:
-    """Build a ``ParseResult`` with ``TaintLevel.VALIDATED`` without parsing.
+    """Build a ``ParseResult`` with ``TrustLevel.VALIDATED`` without parsing.
 
     Content is deep-frozen (``MappingProxyType`` for dicts, ``tuple`` for lists)
     to match the guarantee real VALIDATED results carry.
@@ -59,7 +59,7 @@ def make_validated_result(
         warnings: Any warnings to attach. Defaults to empty list.
 
     Returns:
-        ``ParseResult`` with ``taint=TaintLevel.VALIDATED``.
+        ``ParseResult`` with ``trust_level=TrustLevel.VALIDATED``.
     """
     frozen = _deep_freeze(content) if isinstance(content, dict | list) else content
     return ParseResult(
@@ -68,7 +68,7 @@ def make_validated_result(
         sanitized=True,
         warnings=warnings or [],
         stripped=[],
-        taint=TaintLevel.VALIDATED,
+        trust_level=TrustLevel.VALIDATED,
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
         content_hash=content_hash_of(content),
@@ -86,7 +86,7 @@ def make_sanitized_result(
     stripped: list[str] | None = None,
     raw_hash: str | None = None,
 ) -> ParseResult:
-    """Build a ``ParseResult`` with ``TaintLevel.SANITIZED`` without parsing.
+    """Build a ``ParseResult`` with ``TrustLevel.SANITIZED`` without parsing.
 
     Use this when testing code that must *reject* SANITIZED results
     (e.g., functions decorated with ``@require_validated``).
@@ -100,7 +100,7 @@ def make_sanitized_result(
         stripped: Stripped pattern names. Defaults to empty.
 
     Returns:
-        ``ParseResult`` with ``taint=TaintLevel.SANITIZED``.
+        ``ParseResult`` with ``trust_level=TrustLevel.SANITIZED``.
     """
     return ParseResult(
         content=content,
@@ -108,7 +108,7 @@ def make_sanitized_result(
         sanitized=True,
         warnings=warnings or [],
         stripped=stripped or [],
-        taint=TaintLevel.SANITIZED,
+        trust_level=TrustLevel.SANITIZED,
         provenance=provenance,
         chain_id=chain_id or uuid.uuid4().hex[:12],
         content_hash=content_hash_of(content),

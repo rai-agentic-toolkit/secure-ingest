@@ -66,7 +66,7 @@ result = parse(
 )
 
 # 3. Access the Safe Data
-# Result is TaintLevel.VALIDATED and the content is immutable
+# Result is TrustLevel.VALIDATED and the content is immutable
 print(result.content)
 # > mappingproxy({'tool': 'search', 'args': mappingproxy({...})})
 ```
@@ -121,7 +121,7 @@ optionally validates against Pydantic schemas, and freezes content once validate
 
 ## Taint Tracking
 
-Every `ParseResult` carries a taint level — the trust state of the content:
+Every `ParseResult` carries a trust level — the trust state of the content:
 
 | Level | Meaning |
 | ----- | ------- |
@@ -347,7 +347,7 @@ def test_my_handler_rejects_sanitized():
         my_handler(result)  # decorated with @require_validated
 ```
 
-`make_validated_result()` deep-freezes content (`MappingProxyType` for dicts, `tuple` for lists) to match real VALIDATED results. `make_sanitized_result()` produces SANITIZED taint for testing rejection paths.
+`make_validated_result()` deep-freezes content (`MappingProxyType` for dicts, `tuple` for lists) to match real VALIDATED results. `make_sanitized_result()` produces SANITIZED trust for testing rejection paths.
 
 ## Advanced Modules
 

@@ -38,7 +38,7 @@ class ContentType(Enum):
     XML = "xml"
 
 
-class TaintLevel(Enum):
+class TrustLevel(Enum):
     """Taint level for tracking content trust through multi-agent flows.
 
     Levels (ordered by trust, lowest to highest):
@@ -51,17 +51,17 @@ class TaintLevel(Enum):
     SANITIZED = "sanitized"
     VALIDATED = "validated"
 
-    def __lt__(self, other: TaintLevel) -> bool:
-        order = {TaintLevel.UNTRUSTED: 0, TaintLevel.SANITIZED: 1, TaintLevel.VALIDATED: 2}
+    def __lt__(self, other: TrustLevel) -> bool:
+        order = {TrustLevel.UNTRUSTED: 0, TrustLevel.SANITIZED: 1, TrustLevel.VALIDATED: 2}
         return order[self] < order[other]
 
-    def __le__(self, other: TaintLevel) -> bool:
+    def __le__(self, other: TrustLevel) -> bool:
         return self == other or self < other
 
-    def __gt__(self, other: TaintLevel) -> bool:
+    def __gt__(self, other: TrustLevel) -> bool:
         return not self <= other
 
-    def __ge__(self, other: TaintLevel) -> bool:
+    def __ge__(self, other: TrustLevel) -> bool:
         return not self < other
 
 
@@ -161,7 +161,7 @@ def _deep_freeze(obj: Any) -> Any:
     """Recursively wrap all dicts in MappingProxyType, tuples for lists.
 
     Guarantees that no nested structure can be mutated after content is
-    promoted to VALIDATED taint. One-level MappingProxyType is not enough
+    promoted to VALIDATED trust. One-level MappingProxyType is not enough
     because nested dicts are still regular, mutable djects.
     """
     if isinstance(obj, dict):
@@ -185,7 +185,7 @@ class ParseResult:
     sanitized: bool
     warnings: list[str] = field(default_factory=list)
     stripped: list[str] = field(default_factory=list)
-    taint: TaintLevel = TaintLevel.SANITIZED
+    trust_level: TrustLevel = TrustLevel.SANITIZED
     provenance: str = ""
     chain_id: str = ""
     content_hash: str = ""
@@ -204,24 +204,24 @@ class ParseResult:
         return self.content_hash == content_hash_of(self.content)
 
     def as_validated(self) -> ParseResult:
-        """Return self if taint level is VALIDATED, otherwise raise ParseError.
+        """Return self if trust level is VALIDATED, otherwise raise ParseError.
 
         Use this to assert trust at a boundary without manually checking
-        ``result.taint == TaintLevel.VALIDATED``::
+        ``result.trust_level == TrustLevel.VALIDATED``::
 
             safe = parse(raw, ContentType.JSON, schema=MySchema).as_validated()
             # safe.content is guaranteed to be a frozen MappingProxyType
 
         Raises:
-            ParseError: if taint < VALIDATED (no schema was applied, or
+            ParseError: if trust_level < VALIDATED (no schema was applied, or
                         content was only structurally sanitized).
         """
-        if self.taint < TaintLevel.VALIDATED:
+        if self.trust_level < TrustLevel.VALIDATED:
             raise ParseError(
-                f"ParseResult has taint level {self.taint.name}, expected VALIDATED. "
+                f"ParseResult has trust level {self.trust_level.name}, expected VALIDATED. "
                 "Pass a Pydantic schema to parse() to promote to VALIDATED.",
                 content_type=self.content_type.value if self.content_type else None,
-                violations=["insufficient_taint"],
+                violations=["insufficient_trust_level"],
             )
         return self
 
@@ -232,8 +232,8 @@ class ParseResult:
 def require_validated(func: _F) -> _F:
     """Decorator that asserts the first ParseResult argument is VALIDATED.
 
-    Enforces taint-level contracts at function boundaries without
-    boilerplate ``if result.taint < TaintLevel.VALIDATED: raise ...``::
+    Enforces trust-level contracts at function boundaries without
+    boilerplate ``if result.trust_level < TrustLevel.VALIDATED: raise ...``::
 
         @require_validated
         def call_llm(result: ParseResult) -> str:
@@ -243,8 +243,8 @@ def require_validated(func: _F) -> _F:
         async def async_handler(result: ParseResult) -> dict:
             ...
 
-    Raises ParseError (insufficient_taint) if the first positional argument
-    whose type annotation is ParseResult has taint < VALIDATED.
+    Raises ParseError (insufficient_trust_level) if the first positional argument
+    whose type annotation is ParseResult has trust_level < VALIDATED.
     """
 
     @functools.wraps(func)
@@ -268,27 +268,27 @@ def _enforce_validated(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> None:
-    """Check that any ParseResult arg/kwarg has VALIDATED taint."""
+    """Check that any ParseResult arg/kwarg has VALIDATED trust."""
     params = list(inspect.signature(func).parameters.keys())
 
     # Check positional args
     for _i, (name, val) in enumerate(zip(params, args, strict=False)):
         if isinstance(val, ParseResult):
-            if val.taint < TaintLevel.VALIDATED:
+            if val.trust_level < TrustLevel.VALIDATED:
                 raise ParseError(
-                    f"Argument '{name}' passed to {func.__name__}() has taint level "
-                    f"{val.taint.name}; @require_validated requires VALIDATED. "
+                    f"Argument '{name}' passed to {func.__name__}() has trust level "
+                    f"{val.trust_level.name}; @require_validated requires VALIDATED. "
                     "Pass a Pydantic schema to parse() to promote.",
-                    violations=["insufficient_taint"],
+                    violations=["insufficient_trust_level"],
                 )
     # Check keyword args
     for name, val in kwargs.items():
         if isinstance(val, ParseResult):
-            if val.taint < TaintLevel.VALIDATED:
+            if val.trust_level < TrustLevel.VALIDATED:
                 raise ParseError(
-                    f"Argument '{name}' passed to {func.__name__}() has taint level "
-                    f"{val.taint.name}; @require_validated requires VALIDATED.",
-                    violations=["insufficient_taint"],
+                    f"Argument '{name}' passed to {func.__name__}() has trust level "
+                    f"{val.trust_level.name}; @require_validated requires VALIDATED.",
+                    violations=["insufficient_trust_level"],
                 )
 
 
@@ -890,7 +890,7 @@ def _validate_schema(
             sanitized=result.sanitized,
             warnings=result.warnings,
             stripped=result.stripped,
-            taint=TaintLevel.VALIDATED,
+            trust_level=TrustLevel.VALIDATED,
             provenance=result.provenance,
             chain_id=result.chain_id,
             content_hash=content_hash_of(result.content),
@@ -958,7 +958,7 @@ def _run_semantic(
         sanitized=result.sanitized,
         warnings=new_warnings,
         stripped=new_stripped,
-        taint=result.taint,
+        trust_level=result.trust_level,
         provenance=result.provenance,
         chain_id=result.chain_id,
         content_hash=result.content_hash,
@@ -1025,7 +1025,7 @@ def parse(
         sanitized=result.sanitized,
         warnings=result.warnings,
         stripped=result.stripped,
-        taint=TaintLevel.SANITIZED,
+        trust_level=TrustLevel.SANITIZED,
         provenance=provenance,
         chain_id=active_chain_id,
         content_hash=content_hash_of(result.content),
